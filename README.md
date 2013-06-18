@@ -1,8 +1,8 @@
 ###JMeter Argentum
 
-####User Interface
-This is simple and fast aggregation module for Apache JMeter. He collects, aggregates and writes every second metrics as json-object into file.
+This is simple and fast results aggregation module for Apache JMeter. It collects, aggregates and writes results for every second as json-object into file.
 
+####User Interface
 ![ArgentumListener](http://schiz.me/images/ag/ag.png)
 
 **Timeout** is a delay time between executing samplers and aggregating. Aggregation timeout must be greater than timeout or response time of samplers. If sampler executed longer than this timeout, it would be skipped at the aggregation phase.
