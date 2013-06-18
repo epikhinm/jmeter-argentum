@@ -7,15 +7,15 @@ This is simple and fast aggregation module for Apache JMeter. He collects, aggre
 
 **Timeout** is a delay time between executing samplers and aggregating. Aggregation timeout must be greater than timeout or response time of samplers. If sampler executed longer than this timeout, it would be skipped at the aggregation phase.
 
-**Output File** is a file to store json-objects. 
+**Output File** is a file to store json-objects.
 
 And you can use distributions, based on **percentiles** or **intervals**
 
 **Percentiles** distribution is easy for human understanding, but more difficult for processor. **Interval** distribution divides the time at intervals, with lowering accuracy, but increases the performance of the calculation. You can use both of them with per sample distributions:)
 
 ####JSON Overview
-#####Without RT-distributions 
-```javascript 
+#####Without RT-distributions
+```javascript
 {   "active_threads":8, //Active threads of JMeter
     "traffic":{
         "avg_request_size":0, //Average sampler request size
@@ -24,7 +24,7 @@ And you can use distributions, based on **percentiles** or **intervals**
         "inbound":0 //Sum of all samplers responses sizes at this second
     },
     "avg_lt":60, //Average Latency
-    "sampler_avg_rt":{ 
+    "sampler_avg_rt":{
         "OK200":551, //Average response time for every samples
         "ERROR_WO_RC":1130,
         "ERROR502":399,
@@ -154,4 +154,3 @@ Distributions for every sampler:
 ```
 
 
- 
