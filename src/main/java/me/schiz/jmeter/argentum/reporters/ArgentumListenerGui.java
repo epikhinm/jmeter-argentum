@@ -111,9 +111,7 @@ public class ArgentumListenerGui extends AbstractListenerGui {
         jScrollPane1.setViewportView(info);
         jScrollPane1.setBorder(null);
 
-        info.setText("This is a simple listener that prints short summary log to console while JMeter is running in non-GUI mode. "
-                + "It also writes the same info into jmeter.log in GUI mode."
-                + "\n\nNote that response time and latency values printed are averages.");
+        info.setText("https://github.com/sch1z0phren1a/jmeter-argentum");
 
         add(jScrollPane1, BorderLayout.CENTER);
         add(jGeneralPanel, BorderLayout.CENTER);

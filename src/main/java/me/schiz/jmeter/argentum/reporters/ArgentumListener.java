@@ -231,6 +231,7 @@ public class ArgentumListener extends AbstractListenerElement
     @Override
     public void sampleOccurred(SampleEvent sampleEvent) {
         if(!started) return;
+        //Only for quantile distribution
         Particle p = new Particle(sampleEvent.getResult());
 
         Long start = sampleEvent.getResult().getStartTime() / 1000;
