@@ -154,3 +154,12 @@ Distributions for every sampler:
 ```
 
 
+####Performance
+
+CPU: Intel(R) Core(TM) i7 CPU         930  @ 2.80GHz
+JVM: Oracle Hotspot 1.7u21
+Apache Jmeter: 2.10
+
+![performance](https://docs.google.com/spreadsheet/oimg?key=0Au50JydZm7UjdGJTU1B4bzJUVjdHenNXWWgzRGliQXc&oid=1&zx=22s6egeljlcx)
+
+[google doc table](https://docs.google.com/spreadsheet/ccc?key=0Au50JydZm7UjdGJTU1B4bzJUVjdHenNXWWgzRGliQXc&usp=sharing)
