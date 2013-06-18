@@ -119,10 +119,11 @@ public class ArgentumSecondRunnable implements Runnable {
                 }
                 jsonSecond.put("interval_dist", summaryID);
 
-                prev = 0;
+
                 JSONObject fullPID = new JSONObject();
                 for(String title : intervalDistSamplerMap.keySet()) {
                     ArrayList<JSONObject> titleID = new ArrayList<JSONObject>(TIME_PERIODS.length);
+                    prev = 0;
                     for(int i = 0; i < TIME_PERIODS.length ; ++i) {
                         JSONObject interval = new JSONObject();
                         interval.put("from", prev);
