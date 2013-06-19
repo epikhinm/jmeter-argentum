@@ -11,6 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongArray;
 
 public class ArgentumSecondRunnable implements Runnable {
 
@@ -31,6 +32,10 @@ public class ArgentumSecondRunnable implements Runnable {
     ConcurrentHashMap<String, AtomicIntegerArray> intervalDistSamplerMap;
     protected boolean infoCase;
     protected Writer writer;
+    protected AtomicLongArray percentileDistArray;
+    protected long[] percentileShiftArray;
+
+    static long totalResponseCounter;
 
     static float[] QUANTILES = null;
     static int[] TIME_PERIODS = null;
@@ -51,6 +56,8 @@ public class ArgentumSecondRunnable implements Runnable {
                                   AtomicIntegerArray intervalDistribution,
                                   ConcurrentHashMap<String, AtomicIntegerArray> intervalDistSamplerMap,
                                   boolean infoCase,
+                                  AtomicLongArray percentileDistArray,
+                                  long[] percentileShiftArray,
                                   Writer writer) {
         this.second = second;
         this.active_threads = active_threads;
@@ -66,6 +73,12 @@ public class ArgentumSecondRunnable implements Runnable {
         this.intervalDistribution = intervalDistribution;
         this.intervalDistSamplerMap = intervalDistSamplerMap;
         this.infoCase = infoCase;
+
+        if(percentileDistArray != null) {
+            this.percentileDistArray = percentileDistArray;
+            this.percentileShiftArray = percentileShiftArray;
+        }
+
         this.writer = writer;
     }
 
@@ -178,6 +191,24 @@ public class ArgentumSecondRunnable implements Runnable {
                     }
                     jsonSecond.put("sampler_percentile", fullPerc);
                 }
+                if(percentileDistArray != null) {
+                    long i_rCount = 0;
+                    for(int i = 0; i < percentileDistArray.length() ; ++i) {
+                        i_rCount = percentileDistArray.get(i);
+                        if(i_rCount > 0) {
+                            totalResponseCounter += i_rCount;
+                            for(int j = i; j < percentileShiftArray.length; ++j)  {
+                                percentileShiftArray[j] += i_rCount; //What about SSE?:)
+                            }
+                        }
+                    }
+
+                    JSONObject cumulativePercentiles = new JSONObject();
+                    for(float f: QUANTILES) {
+                        cumulativePercentiles.put(f * 100, binarySearchMinIndex(percentileShiftArray, (int)(totalResponseCounter * f)));
+                    }
+                    jsonSecond.put("cumulative_percentile", cumulativePercentiles);
+                }
             }
             writer.write((jsonSecond.toJSONString() + "\n" ).toCharArray());
             writer.flush();
@@ -185,5 +216,16 @@ public class ArgentumSecondRunnable implements Runnable {
             log.error("Runnable exception", e);
             log.error(e.getStackTrace().toString());
         }
+    }
+
+    private static long binarySearchMinIndex(long []array, int x) {
+        int left = 0, right = array.length-1;
+        int half_sum;
+        while (right - left > 1 ) {
+            half_sum = (right + left) / 2;
+            if(array[half_sum] >= x) right = half_sum;
+            else if(array[half_sum] < x) left = half_sum;
+        }
+        return right;
     }
 }

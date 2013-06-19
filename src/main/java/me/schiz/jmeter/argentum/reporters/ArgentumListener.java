@@ -19,6 +19,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongArray;
 
 public class ArgentumListener extends AbstractListenerElement
         implements SampleListener, NoThreadClone, TestListener {
@@ -50,8 +51,13 @@ public class ArgentumListener extends AbstractListenerElement
     protected ConcurrentHashMap<Long, AtomicLong> sumInboundTraffic; // for avg inbound traffic metric
     protected ConcurrentHashMap<Long, AtomicLong> sumOutboundTraffic; // for avg outbound traffic metric
 
+    protected ConcurrentHashMap<Long, AtomicLongArray> percentileDistMap; //seconds map for cumulative percentile distribution
+    protected long[]    percentileDistShiftArray; //shift-array for cumulative percentile distribution
+
     protected volatile boolean isCalcQuantileDist = false;
     protected volatile boolean isCalcIntervalDist = false;
+    protected volatile boolean isCalcCumulativeQuantileDist = false;
+
 
 
     protected static ExecutorService executors;
@@ -122,6 +128,9 @@ public class ArgentumListener extends AbstractListenerElement
                 intervalDistMap.put(second, new AtomicIntegerArray(ArgentumSecondRunnable.TIME_PERIODS.length));
                 intervalDistSamplerMap.put(second, new ConcurrentHashMap<String, AtomicIntegerArray>());
             }
+            if(isCalcCumulativeQuantileDist) {
+                percentileDistMap.put(second, new AtomicLongArray(getTimeout() * 1000 + 1));
+            }
             sumInboundTraffic.put(second, new AtomicLong(0));
             sumOutboundTraffic.put(second, new AtomicLong(0));
 
@@ -150,6 +159,8 @@ public class ArgentumListener extends AbstractListenerElement
                         isCalcIntervalDist ? intervalDistMap.get(rSecond) : null,
                         isCalcIntervalDist ? intervalDistSamplerMap.get(rSecond) : null,
                         true, //case distributions
+                        isCalcCumulativeQuantileDist ? percentileDistMap.get(rSecond) : null,
+                        isCalcCumulativeQuantileDist ? percentileDistShiftArray : null,
                         writer
                 ));
             } else log.warn("Not found executors");
@@ -164,9 +175,12 @@ public class ArgentumListener extends AbstractListenerElement
             sumInboundTraffic.remove(rSecond);
             sumOutboundTraffic.remove(rSecond);
             if(isCalcQuantileDist)  particlesMap.remove(rSecond);
-            if(isCalcQuantileDist) {
+            if(isCalcIntervalDist) {
                 intervalDistMap.remove(rSecond);
                 intervalDistSamplerMap.remove(rSecond);
+            }
+            if(isCalcCumulativeQuantileDist) {
+                percentileDistMap.remove(rSecond);
             }
 
         }
@@ -264,6 +278,7 @@ public class ArgentumListener extends AbstractListenerElement
         }
 
         if(isCalcQuantileDist)  particlesMap.get(start).add(p);
+        if(isCalcCumulativeQuantileDist)    percentileDistMap.get(start).getAndIncrement(p.rt);
     }
 
     @Override
@@ -297,11 +312,16 @@ public class ArgentumListener extends AbstractListenerElement
         sumInboundTraffic = new ConcurrentHashMap<Long, AtomicLong>(getTimeout() + floatingSeconds);
         sumOutboundTraffic = new ConcurrentHashMap<Long, AtomicLong>(getTimeout() + floatingSeconds);
 
-
         if(getPercentiles() != null) {
             ArgentumSecondRunnable.QUANTILES = getPercentiles();
             isCalcQuantileDist = true;
             particlesMap = new ConcurrentHashMap<Long, List<Particle>>(getTimeout() + floatingSeconds);
+
+            //For cumulative percentiles
+            isCalcCumulativeQuantileDist = true;
+            percentileDistMap = new ConcurrentHashMap<Long, AtomicLongArray>(getTimeout() + floatingSeconds);
+            percentileDistShiftArray = new long[getTimeout()*1000 + 1];
+
         }
         if(getTimePeriods() != null) {
             ArgentumSecondRunnable.TIME_PERIODS = getTimePeriods();
@@ -353,6 +373,8 @@ public class ArgentumListener extends AbstractListenerElement
                         isCalcIntervalDist ? intervalDistMap.get(rSecond) : null,
                         isCalcIntervalDist ? intervalDistSamplerMap.get(rSecond) : null,
                         isCalcIntervalDist, //case distributions
+                        isCalcCumulativeQuantileDist ? percentileDistMap.get(rSecond) : null,
+                        isCalcCumulativeQuantileDist ? percentileDistShiftArray : null,
                         writer
                 ));
             } else log.warn("Not found executors");
@@ -370,6 +392,9 @@ public class ArgentumListener extends AbstractListenerElement
             if(isCalcIntervalDist) {
                 intervalDistMap.remove(rSecond);
                 intervalDistSamplerMap.remove(rSecond);
+            }
+            if(isCalcCumulativeQuantileDist) {
+                percentileDistMap.remove(rSecond);
             }
         }
         if(executors != null) {
