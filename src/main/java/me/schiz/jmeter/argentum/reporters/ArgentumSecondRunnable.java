@@ -35,7 +35,13 @@ public class ArgentumSecondRunnable implements Runnable {
     protected AtomicLongArray percentileDistArray;
     protected long[] percentileShiftArray;
 
-    static long totalResponseCounter;
+    protected ConcurrentHashMap<String, AtomicLongArray> samplerPercentileDistMap;
+    protected ConcurrentHashMap<String, Long[]> samplerCumulativeShiftArray;
+    protected ConcurrentHashMap<String, AtomicLong> samplerTotalCounterMap;
+
+    protected int timeout;
+
+    static long totalResponseCounter;   //deprecated
 
     static float[] QUANTILES = null;
     static int[] TIME_PERIODS = null;
@@ -56,9 +62,13 @@ public class ArgentumSecondRunnable implements Runnable {
                                   AtomicIntegerArray intervalDistribution,
                                   ConcurrentHashMap<String, AtomicIntegerArray> intervalDistSamplerMap,
                                   boolean infoCase,
-                                  AtomicLongArray percentileDistArray,
-                                  long[] percentileShiftArray,
-                                  Writer writer) {
+                                  AtomicLongArray percentileDistArray, //for second percentile distribution
+                                  long[] percentileShiftArray, // for overall percentile distribution
+                                  ConcurrentHashMap<String, AtomicLongArray> samplerPercentileDistMap,
+                                  ConcurrentHashMap<String, Long[]> samplerCumulativeShiftArray,
+                                  ConcurrentHashMap<String, AtomicLong> samplerTotalCounterMap,
+                                  Writer writer,
+                                  int timeout) {
         this.second = second;
         this.active_threads = active_threads;
         this.throughput = throughput;
@@ -79,7 +89,12 @@ public class ArgentumSecondRunnable implements Runnable {
             this.percentileShiftArray = percentileShiftArray;
         }
 
+        this.samplerPercentileDistMap = samplerPercentileDistMap;
+        this.samplerCumulativeShiftArray = samplerCumulativeShiftArray;
+        this.samplerTotalCounterMap = samplerTotalCounterMap;
+
         this.writer = writer;
+        this.timeout = timeout;
     }
 
     @Override
@@ -208,17 +223,63 @@ public class ArgentumSecondRunnable implements Runnable {
                         cumulativePercentiles.put(f * 100, binarySearchMinIndex(percentileShiftArray, (int)(totalResponseCounter * f)));
                     }
                     jsonSecond.put("cumulative_percentile", cumulativePercentiles);
+
+                    JSONObject cumulativeSamplerDistribution = new JSONObject();
+                    for(String title: titleMap.keySet()) {
+                        if(samplerTotalCounterMap.get(title) == null) {
+                            samplerTotalCounterMap.put(title, new AtomicLong(0));
+                        }
+                        if(samplerCumulativeShiftArray.get(title) == null) {
+                            Long[] array = new Long[timeout*1000 + 1];
+                            Arrays.fill(array, Long.valueOf(0));
+//                            for(int k = 0; k< array.length;) {
+//                                array[k++] = Long.valueOf(0);   //Sorry
+//                            }
+                            samplerCumulativeShiftArray.put(title, array);
+                        }
+                        //i_rCount = 0;
+                        Long[] cursor = samplerCumulativeShiftArray.get(title).clone();
+                        for(int i = 0; i < samplerPercentileDistMap.get(title).length() ; ++i) {
+                            i_rCount = samplerPercentileDistMap.get(title).get(i);
+                            if(i_rCount > 0) {
+                                samplerTotalCounterMap.get(title).getAndAdd(i_rCount);
+                                for(int j = i; j < cursor.length; ++j)  {
+                                    //System.out.println(cursor[j] + "\t " + j + "\t" + i_rCount);
+                                    cursor[j] += i_rCount; //What about SSE?:)
+                                }
+                            }
+                        }
+                        samplerCumulativeShiftArray.put(title, cursor);
+
+                        JSONObject cumulativeSamplePercentile = new JSONObject();
+                        for(float f: QUANTILES) {
+                            cumulativeSamplePercentile.put(f * 100, binarySearchMinIndex(samplerCumulativeShiftArray.get(title), (int)(samplerTotalCounterMap.get(title).get() * f)));
+                        }
+                        cumulativeSamplerDistribution.put(title, cumulativeSamplePercentile);
+                    }
+                    //jsonSecond = cumulativeSamplerDistribution;
+                    jsonSecond.put("cumulative_sampler_percentile", cumulativeSamplerDistribution);
                 }
             }
             writer.write((jsonSecond.toJSONString() + "\n" ).toCharArray());
             writer.flush();
         } catch(Exception e) {
             log.error("Runnable exception", e);
-            log.error(e.getStackTrace().toString());
+            log.error(e.getMessage());
         }
     }
 
     private static long binarySearchMinIndex(long []array, int x) {
+        int left = 0, right = array.length-1;
+        int half_sum;
+        while (right - left > 1 ) {
+            half_sum = (right + left) / 2;
+            if(array[half_sum] >= x) right = half_sum;
+            else if(array[half_sum] < x) left = half_sum;
+        }
+        return right;
+    }
+    private static long binarySearchMinIndex(Long []array, long x) {
         int left = 0, right = array.length-1;
         int half_sum;
         while (right - left > 1 ) {
