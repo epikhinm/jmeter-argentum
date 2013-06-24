@@ -1,20 +1,17 @@
 package me.schiz.jmeter.argentum.reporters;
 
-import me.schiz.jmeter.argentum.Particle;
 import org.apache.jmeter.engine.event.LoopIterationEvent;
 import org.apache.jmeter.engine.util.NoThreadClone;
 import org.apache.jmeter.reporters.AbstractListenerElement;
 import org.apache.jmeter.samplers.SampleEvent;
 import org.apache.jmeter.samplers.SampleListener;
+import org.apache.jmeter.samplers.SampleResult;
 import org.apache.jmeter.testelement.TestListener;
 import org.apache.jmeter.threads.JMeterContextService;
 import org.apache.jorphan.logging.LoggingManager;
 import org.apache.log.Logger;
 
 import java.io.*;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
@@ -45,7 +42,6 @@ public class ArgentumListener extends AbstractListenerElement
     protected ConcurrentHashMap<Long, AtomicLong> sumRTMap;  //for average response time metric
     protected ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicLong>> sumRTSamplerMap;  //for average response time per sampler metric
     protected ConcurrentHashMap<Long, AtomicLong> sumLTMap;  //for average latency metric
-    protected ConcurrentHashMap<Long, List<Particle>>   particlesMap; //full particles per second maps
     protected ConcurrentHashMap<Long, AtomicIntegerArray>   intervalDistMap; //interval distribution based on time periods per second map
     protected ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicIntegerArray>>   intervalDistSamplerMap; //interval distribution based on time periods per second map for all bullets
     protected ConcurrentHashMap<Long, AtomicLong> sumInboundTraffic; // for avg inbound traffic metric
@@ -54,13 +50,15 @@ public class ArgentumListener extends AbstractListenerElement
     protected ConcurrentHashMap<Long, AtomicLongArray> percentileDistMap; //seconds map for cumulative percentile distribution
     protected long[]    percentileDistShiftArray; //shift-array for cumulative percentile distribution
     protected ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicLongArray>>   samplerPercentileDistMap;
-    protected ConcurrentHashMap<String, Long[]>    samplerCumulativePercentileShiftArray;
+    protected ConcurrentHashMap<String, long[]>    samplerCumulativePercentileShiftArray;
 
     protected ConcurrentHashMap<String, AtomicLong> samplerTotalCounterMap;
 
     protected volatile boolean isCalcQuantileDist = false;
     protected volatile boolean isCalcIntervalDist = false;
-    protected volatile boolean isCalcCumulativeQuantileDist = false;
+
+    static String RC_OK = "200";
+    static String RC_ERROR = "500";
 
     protected static ExecutorService executors;
 
@@ -125,12 +123,11 @@ public class ArgentumListener extends AbstractListenerElement
             sumLTMap.put(second, new AtomicLong(0));
             responseCodeMap.put(second, new ConcurrentHashMap<String, AtomicInteger>());
             titleMap.put(second, new ConcurrentHashMap<String, AtomicInteger>());
-            if(isCalcQuantileDist)  particlesMap.put(second, Collections.synchronizedList(new ArrayList<Particle>((int)(1.2 * max_th))));
             if(isCalcIntervalDist) {
                 intervalDistMap.put(second, new AtomicIntegerArray(ArgentumSecondRunnable.TIME_PERIODS.length));
                 intervalDistSamplerMap.put(second, new ConcurrentHashMap<String, AtomicIntegerArray>());
             }
-            if(isCalcCumulativeQuantileDist) {
+            if(isCalcQuantileDist) {
                 percentileDistMap.put(second, new AtomicLongArray(getTimeout() * 1000 + 1));
                 samplerPercentileDistMap.put(second, new ConcurrentHashMap<String, AtomicLongArray>());
             }
@@ -158,14 +155,13 @@ public class ArgentumListener extends AbstractListenerElement
                         sumLTMap.get(rSecond).get(),
                         sumInboundTraffic.get(rSecond).get(),
                         sumOutboundTraffic.get(rSecond).get(),
-                        isCalcQuantileDist ? particlesMap.get(rSecond) : null,
                         isCalcIntervalDist ? intervalDistMap.get(rSecond) : null,
                         isCalcIntervalDist ? intervalDistSamplerMap.get(rSecond) : null,
                         true, //case distributions
-                        isCalcCumulativeQuantileDist ? percentileDistMap.get(rSecond) : null,
-                        isCalcCumulativeQuantileDist ? percentileDistShiftArray : null,
-                        isCalcCumulativeQuantileDist ? samplerPercentileDistMap.get(rSecond) : null,
-                        isCalcCumulativeQuantileDist ? samplerCumulativePercentileShiftArray : null,
+                        isCalcQuantileDist ? percentileDistMap.get(rSecond) : null,
+                        isCalcQuantileDist ? percentileDistShiftArray : null,
+                        isCalcQuantileDist ? samplerPercentileDistMap.get(rSecond) : null,
+                        isCalcQuantileDist ? samplerCumulativePercentileShiftArray : null,
                         samplerTotalCounterMap,
                         writer,
                         getTimeout()
@@ -181,12 +177,11 @@ public class ArgentumListener extends AbstractListenerElement
             titleMap.remove(rSecond);
             sumInboundTraffic.remove(rSecond);
             sumOutboundTraffic.remove(rSecond);
-            if(isCalcQuantileDist)  particlesMap.remove(rSecond);
             if(isCalcIntervalDist) {
                 intervalDistMap.remove(rSecond);
                 intervalDistSamplerMap.remove(rSecond);
             }
-            if(isCalcCumulativeQuantileDist) {
+            if(isCalcQuantileDist) {
                 percentileDistMap.remove(rSecond);
                 samplerPercentileDistMap.remove(rSecond);
             }
@@ -267,10 +262,11 @@ public class ArgentumListener extends AbstractListenerElement
     @Override
     public void sampleOccurred(SampleEvent sampleEvent) {
         if(!started) return;
-        //Only for quantile distribution
-        Particle p = new Particle(sampleEvent.getResult());
+        SampleResult sr = sampleEvent.getResult();
 
-        Long start = sampleEvent.getResult().getStartTime() / 1000;
+        String samplerName = sr.getSampleLabel();
+        long start = sr.getStartTime() / 1000;
+        int rt = (int)sr.getTime();
 
         if(!secSet.contains(start)) {
             if(!createSecond(start)) {
@@ -281,28 +277,26 @@ public class ArgentumListener extends AbstractListenerElement
             }
         }
         throughputMap.get(start).incrementAndGet();
-        sumRTMap.get(start).getAndAdd(p.rt);
+        sumRTMap.get(start).getAndAdd(rt);
         sumLTMap.get(start).getAndAdd(sampleEvent.getResult().getLatency());
-        addSamplerToSumRTSamplerMap(start, String.valueOf(p.name), p.rt);
-        addRCtoMap(start, String.valueOf(p.rc));
-        addTitletoMap(start, String.valueOf(p.name));
+        addSamplerToSumRTSamplerMap(start, samplerName, rt);
+        addRCtoMap(start, convertResponseCode(sr));
+        addTitletoMap(start, samplerName);
         sumInboundTraffic.get(start).getAndAdd(sampleEvent.getResult().getBodySize());
         sumOutboundTraffic.get(start).getAndAdd(sampleEvent.getResult().getHeadersSize());
 
         if(isCalcIntervalDist) {
             for(int i = 0; i < ArgentumSecondRunnable.TIME_PERIODS.length ; ++i) {
-                if(p.rt < ArgentumSecondRunnable.TIME_PERIODS[i]) {
+                if(rt < ArgentumSecondRunnable.TIME_PERIODS[i]) {
                     intervalDistMap.get(start).addAndGet(i, 1);
                     break;
                 }
             }
-            addToPidMap(start, String.valueOf(p.name), p.rt);
+            addToPidMap(start, samplerName, rt);
         }
-
-        if(isCalcQuantileDist)  particlesMap.get(start).add(p);
-        if(isCalcCumulativeQuantileDist) {
-            percentileDistMap.get(start).getAndIncrement(p.rt);
-            addToSamplerDistMap(start, String.valueOf(p.name), p.rt);
+        if(isCalcQuantileDist) {
+            percentileDistMap.get(start).getAndIncrement(rt);
+            addToSamplerDistMap(start, samplerName, rt);
         }
     }
 
@@ -341,14 +335,11 @@ public class ArgentumListener extends AbstractListenerElement
         if(getPercentiles() != null) {
             ArgentumSecondRunnable.QUANTILES = getPercentiles();
             isCalcQuantileDist = true;
-            particlesMap = new ConcurrentHashMap<Long, List<Particle>>(getTimeout() + floatingSeconds);
-
             //For cumulative percentiles
-            isCalcCumulativeQuantileDist = true;
             percentileDistMap = new ConcurrentHashMap<Long, AtomicLongArray>(getTimeout() + floatingSeconds);
             percentileDistShiftArray = new long[getTimeout()*1000 + 1];
             samplerPercentileDistMap = new ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicLongArray>>(getTimeout() + floatingSeconds);
-            samplerCumulativePercentileShiftArray = new ConcurrentHashMap<String, Long[]>();
+            samplerCumulativePercentileShiftArray = new ConcurrentHashMap<String, long[]>();
 
         }
         if(getTimePeriods() != null) {
@@ -397,14 +388,13 @@ public class ArgentumListener extends AbstractListenerElement
                         sumLTMap.get(rSecond).get(),
                         sumInboundTraffic.get(rSecond).get(),
                         sumOutboundTraffic.get(rSecond).get(),
-                        isCalcQuantileDist ? particlesMap.get(rSecond) : null ,
                         isCalcIntervalDist ? intervalDistMap.get(rSecond) : null,
                         isCalcIntervalDist ? intervalDistSamplerMap.get(rSecond) : null,
                         isCalcIntervalDist, //case distributions
-                        isCalcCumulativeQuantileDist ? percentileDistMap.get(rSecond) : null,
-                        isCalcCumulativeQuantileDist ? percentileDistShiftArray : null,
-                        isCalcCumulativeQuantileDist ? samplerPercentileDistMap.get(rSecond) : null,
-                        isCalcCumulativeQuantileDist ? samplerCumulativePercentileShiftArray : null,
+                        isCalcQuantileDist ? percentileDistMap.get(rSecond) : null,
+                        isCalcQuantileDist ? percentileDistShiftArray : null,
+                        isCalcQuantileDist ? samplerPercentileDistMap.get(rSecond) : null,
+                        isCalcQuantileDist ? samplerCumulativePercentileShiftArray : null,
                         samplerTotalCounterMap,
                         writer,
                         getTimeout()
@@ -420,12 +410,11 @@ public class ArgentumListener extends AbstractListenerElement
             titleMap.remove(rSecond);
             sumInboundTraffic.remove(rSecond);
             sumOutboundTraffic.remove(rSecond);
-            if(isCalcQuantileDist)  particlesMap.remove(rSecond);
             if(isCalcIntervalDist) {
                 intervalDistMap.remove(rSecond);
                 intervalDistSamplerMap.remove(rSecond);
             }
-            if(isCalcCumulativeQuantileDist) {
+            if(isCalcQuantileDist) {
                 percentileDistMap.remove(rSecond);
                 samplerPercentileDistMap.remove(rSecond);
             }
@@ -444,5 +433,15 @@ public class ArgentumListener extends AbstractListenerElement
 
     @Override
     public void testIterationStart(LoopIterationEvent loopIterationEvent) {
+    }
+
+    private String convertResponseCode(SampleResult sr) {
+        if(!sr.getResponseCode().isEmpty()) {
+            return sr.getResponseCode();
+        } else {
+            if(sr.isSuccessful())   return RC_OK;
+            else                    return RC_ERROR;
+        }
+
     }
 }

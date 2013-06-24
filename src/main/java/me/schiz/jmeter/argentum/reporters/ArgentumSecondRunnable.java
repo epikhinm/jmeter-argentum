@@ -1,6 +1,5 @@
 package me.schiz.jmeter.argentum.reporters;
 
-import me.schiz.jmeter.argentum.Particle;
 import org.apache.jorphan.logging.LoggingManager;
 import org.apache.log.Logger;
 import org.json.simple.JSONObject;
@@ -27,7 +26,6 @@ public class ArgentumSecondRunnable implements Runnable {
     protected long sumLT;
     protected long inbound;
     protected long outbound;
-    protected List<Particle> particleList;
     protected AtomicIntegerArray intervalDistribution;
     ConcurrentHashMap<String, AtomicIntegerArray> intervalDistSamplerMap;
     protected boolean infoCase;
@@ -36,7 +34,7 @@ public class ArgentumSecondRunnable implements Runnable {
     protected long[] percentileShiftArray;
 
     protected ConcurrentHashMap<String, AtomicLongArray> samplerPercentileDistMap;
-    protected ConcurrentHashMap<String, Long[]> samplerCumulativeShiftArray;
+    protected ConcurrentHashMap<String, long[]> samplerCumulativeShiftArrayMap;
     protected ConcurrentHashMap<String, AtomicLong> samplerTotalCounterMap;
 
     protected int timeout;
@@ -58,14 +56,13 @@ public class ArgentumSecondRunnable implements Runnable {
                                   long sumLT,
                                   long inbound,
                                   long outbound,
-                                  List<Particle> particleList,
                                   AtomicIntegerArray intervalDistribution,
                                   ConcurrentHashMap<String, AtomicIntegerArray> intervalDistSamplerMap,
                                   boolean infoCase,
                                   AtomicLongArray percentileDistArray, //for second percentile distribution
                                   long[] percentileShiftArray, // for overall percentile distribution
                                   ConcurrentHashMap<String, AtomicLongArray> samplerPercentileDistMap,
-                                  ConcurrentHashMap<String, Long[]> samplerCumulativeShiftArray,
+                                  ConcurrentHashMap<String, long[]> samplerCumulativeShiftArray,
                                   ConcurrentHashMap<String, AtomicLong> samplerTotalCounterMap,
                                   Writer writer,
                                   int timeout) {
@@ -79,7 +76,6 @@ public class ArgentumSecondRunnable implements Runnable {
         this.sumLT = sumLT;
         this.inbound = inbound;
         this.outbound = outbound;
-        this.particleList = particleList;
         this.intervalDistribution = intervalDistribution;
         this.intervalDistSamplerMap = intervalDistSamplerMap;
         this.infoCase = infoCase;
@@ -90,19 +86,107 @@ public class ArgentumSecondRunnable implements Runnable {
         }
 
         this.samplerPercentileDistMap = samplerPercentileDistMap;
-        this.samplerCumulativeShiftArray = samplerCumulativeShiftArray;
+        this.samplerCumulativeShiftArrayMap = samplerCumulativeShiftArray;
         this.samplerTotalCounterMap = samplerTotalCounterMap;
 
         this.writer = writer;
         this.timeout = timeout;
     }
 
+    private JSONObject calculateSecondTotalPercentile() {
+        JSONObject result = new JSONObject();
+
+        long i_rCount;
+        long[] generalShiftArray = new long[timeout*1000 + 1];
+        for(int i = 0; i < percentileDistArray.length() ; ++i) {
+            i_rCount = percentileDistArray.get(i);
+            if(i_rCount > 0) {
+                totalResponseCounter += i_rCount;
+                for(int j = i; j < generalShiftArray.length; ++j)  {
+                    generalShiftArray[j] += i_rCount; //What about SSE?:)
+                }
+                for(int j=i;j<percentileShiftArray.length;++j) {
+                    percentileShiftArray[j] += i_rCount; // for cumulative distribution
+                }
+            }
+        }
+
+        for(float f: QUANTILES) {
+            result.put(f * 100, binarySearchMinIndex(generalShiftArray, (int)(this.throughput * f)));
+        }
+
+        return result;
+    }
+
+    private JSONObject calculateCumulativeTotalPercentile() {
+        JSONObject result = new JSONObject();
+        for(float f: QUANTILES) {
+            result.put(f * 100, binarySearchMinIndex(this.percentileShiftArray, (int)(totalResponseCounter * f)));
+        }
+        return result;
+    }
+
+    private JSONObject calculateSecondSamplerPercentile() {
+        JSONObject result = new JSONObject();
+
+        for(String sampler : titleMap.keySet()) {
+            JSONObject samplerPercentile = new JSONObject();
+
+            AtomicLongArray samplerDistribution = samplerPercentileDistMap.get(sampler);
+            long[] cumulativeShiftArray = samplerCumulativeShiftArrayMap.get(sampler);
+            AtomicLong samplerCounter = samplerTotalCounterMap.get(sampler);
+
+            if(cumulativeShiftArray == null) {
+                cumulativeShiftArray = new long[timeout*1000 + 1];
+                Arrays.fill(cumulativeShiftArray, Long.valueOf(0));
+                samplerCumulativeShiftArrayMap.put(sampler, cumulativeShiftArray);
+            }
+            if(samplerCounter == null) {
+                samplerCounter = new AtomicLong(0);
+                samplerTotalCounterMap.put(sampler, samplerCounter);
+            }
+
+            int samplerThroughput = 0;
+            long i_rCount;
+            long[] samplerShiftArray = new long[timeout*1000 + 1];
+            for(int i = 0; i < samplerDistribution.length() ; ++i) {
+                i_rCount = samplerDistribution.get(i);
+                if(i_rCount > 0) {
+                    for(int j = i; j < samplerShiftArray.length; ++j)  {
+                        samplerShiftArray[j] += i_rCount; //What about SSE?:)
+                    }
+                    for(int j = i; j < cumulativeShiftArray.length; ++j) {
+                        cumulativeShiftArray[j] += i_rCount;    //SSE ?
+                    }
+                    samplerThroughput += i_rCount;
+                    samplerCounter.getAndAdd(i_rCount);
+                }
+            }
+            for(float f: QUANTILES) {
+                samplerPercentile.put(f * 100, binarySearchMinIndex(samplerShiftArray, (int)(samplerThroughput * f)));
+            }
+            result.put(sampler, samplerPercentile);
+        }
+
+        return result;
+    }
+
+    public JSONObject calculateCumulativeSamplerPercentile() {
+        JSONObject result = new JSONObject();
+        for(String sampler : titleMap.keySet()) {
+            JSONObject samplerCumulativePercentile = new JSONObject();
+            for(float f: QUANTILES) {
+                samplerCumulativePercentile.put(f * 100, binarySearchMinIndex(this.samplerCumulativeShiftArrayMap.get(sampler), (int)(samplerTotalCounterMap.get(sampler).get() * f)));
+            }
+            result.put(sampler, samplerCumulativePercentile);
+        }
+        return result;
+    }
+
     @Override
     public void run() {
         try {
             JSONObject jsonSecond = new JSONObject();
-
-            boolean do_really_case_info = false;
 
             jsonSecond.put("second", second);
             jsonSecond.put("th", throughput);
@@ -119,7 +203,7 @@ public class ArgentumSecondRunnable implements Runnable {
 
             jsonSecond.put("rc", responseCodeMap);
 
-            if(titleMap.size() > 1 && infoCase)    do_really_case_info = true;
+            //if(titleMap.size() > 1 && infoCase)    do_really_case_info = true;
             jsonSecond.put("samplers", titleMap);
 
             JSONObject jsonTraffic = new JSONObject();
@@ -129,8 +213,6 @@ public class ArgentumSecondRunnable implements Runnable {
             jsonTraffic.put("avg_request_size", outbound / throughput);
 
             jsonSecond.put("traffic", jsonTraffic);
-
-            JSONObject percentile_pair;
 
             if(TIME_PERIODS != null) {
                 log.info("calculate interval distribution");
@@ -167,99 +249,10 @@ public class ArgentumSecondRunnable implements Runnable {
 
             if(QUANTILES != null) {
                 log.warn("calculate percentiles");
-                // One slow mega sort
-                Collections.sort(particleList);
-
-                JSONObject commonPerc = new JSONObject();
-                for(float f : QUANTILES) {
-                    commonPerc.put(f*100, particleList.get((int)(f*throughput - 1)).rt);
-                }
-                jsonSecond.put("percentile", commonPerc);
-
-                if(do_really_case_info) {
-                    LinkedHashMap<String, ArrayList<Particle>> caseParticles = new LinkedHashMap<String, ArrayList<Particle>>();
-                    JSONObject fullPerc = new JSONObject(); // for all cases
-
-                    for(String t : titleMap.keySet()) {
-                        caseParticles.put(t, new ArrayList<Particle>(titleMap.get(t).get()));
-                    }
-
-                    for(Particle p : particleList) {
-                        caseParticles.get(String.valueOf(p.name)).add(p);
-                    }
-
-                    for(String t : titleMap.keySet()) {
-                        int case_th = titleMap.get(t).get();
-                        JSONObject casePerc = new JSONObject();
-                        for(float f: QUANTILES) {
-                            casePerc.put(f * 100, caseParticles.get(t).get((int) (f * case_th - 1)).rt);
-                        }
-                        fullPerc.put(t, casePerc);
-                    }
-                    jsonSecond.put("sampler_percentile", fullPerc);
-                } else {
-                    //if only one title copy information from main percentile map;
-                    JSONObject fullPerc = new JSONObject();
-                    for(String t : titleMap.keySet()) {
-                        fullPerc.put(t, commonPerc);
-                        break;
-                    }
-                    jsonSecond.put("sampler_percentile", fullPerc);
-                }
-                if(percentileDistArray != null) {
-                    long i_rCount = 0;
-                    for(int i = 0; i < percentileDistArray.length() ; ++i) {
-                        i_rCount = percentileDistArray.get(i);
-                        if(i_rCount > 0) {
-                            totalResponseCounter += i_rCount;
-                            for(int j = i; j < percentileShiftArray.length; ++j)  {
-                                percentileShiftArray[j] += i_rCount; //What about SSE?:)
-                            }
-                        }
-                    }
-
-                    JSONObject cumulativePercentiles = new JSONObject();
-                    for(float f: QUANTILES) {
-                        cumulativePercentiles.put(f * 100, binarySearchMinIndex(percentileShiftArray, (int)(totalResponseCounter * f)));
-                    }
-                    jsonSecond.put("cumulative_percentile", cumulativePercentiles);
-
-                    JSONObject cumulativeSamplerDistribution = new JSONObject();
-                    for(String title: titleMap.keySet()) {
-                        if(samplerTotalCounterMap.get(title) == null) {
-                            samplerTotalCounterMap.put(title, new AtomicLong(0));
-                        }
-                        if(samplerCumulativeShiftArray.get(title) == null) {
-                            Long[] array = new Long[timeout*1000 + 1];
-                            Arrays.fill(array, Long.valueOf(0));
-//                            for(int k = 0; k< array.length;) {
-//                                array[k++] = Long.valueOf(0);   //Sorry
-//                            }
-                            samplerCumulativeShiftArray.put(title, array);
-                        }
-                        //i_rCount = 0;
-                        Long[] cursor = samplerCumulativeShiftArray.get(title).clone();
-                        for(int i = 0; i < samplerPercentileDistMap.get(title).length() ; ++i) {
-                            i_rCount = samplerPercentileDistMap.get(title).get(i);
-                            if(i_rCount > 0) {
-                                samplerTotalCounterMap.get(title).getAndAdd(i_rCount);
-                                for(int j = i; j < cursor.length; ++j)  {
-                                    //System.out.println(cursor[j] + "\t " + j + "\t" + i_rCount);
-                                    cursor[j] += i_rCount; //What about SSE?:)
-                                }
-                            }
-                        }
-                        samplerCumulativeShiftArray.put(title, cursor);
-
-                        JSONObject cumulativeSamplePercentile = new JSONObject();
-                        for(float f: QUANTILES) {
-                            cumulativeSamplePercentile.put(f * 100, binarySearchMinIndex(samplerCumulativeShiftArray.get(title), (int)(samplerTotalCounterMap.get(title).get() * f)));
-                        }
-                        cumulativeSamplerDistribution.put(title, cumulativeSamplePercentile);
-                    }
-                    //jsonSecond = cumulativeSamplerDistribution;
-                    jsonSecond.put("cumulative_sampler_percentile", cumulativeSamplerDistribution);
-                }
+                jsonSecond.put("percentile", calculateSecondTotalPercentile());
+                jsonSecond.put("sampler_percentile", calculateSecondSamplerPercentile());
+                jsonSecond.put("cumulative_percentile", calculateCumulativeTotalPercentile());
+                jsonSecond.put("cumulative_sampler_percentile", calculateCumulativeSamplerPercentile());
             }
             writer.write((jsonSecond.toJSONString() + "\n" ).toCharArray());
             writer.flush();
@@ -270,16 +263,6 @@ public class ArgentumSecondRunnable implements Runnable {
     }
 
     private static long binarySearchMinIndex(long []array, int x) {
-        int left = 0, right = array.length-1;
-        int half_sum;
-        while (right - left > 1 ) {
-            half_sum = (right + left) / 2;
-            if(array[half_sum] >= x) right = half_sum;
-            else if(array[half_sum] < x) left = half_sum;
-        }
-        return right;
-    }
-    private static long binarySearchMinIndex(Long []array, long x) {
         int left = 0, right = array.length-1;
         int half_sum;
         while (right - left > 1 ) {
