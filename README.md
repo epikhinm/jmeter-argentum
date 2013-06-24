@@ -95,8 +95,68 @@ And distributions for every sampler:
     }
 ```
 
-#####Interval Distribution
-JSON-object also may containt summary interval distribution
+####Cumulative Percentile Distribution
+Percentile distribution for the entire duration of the test. Don't warry about OOM. This aggregator not collects all of SampleResult:) It's magic:)
+
+```javascript
+    ...
+    "cumulative_percentile":{
+        "25.0":363,
+        "50.0":508,
+        "75.0":828,
+        "80.0":891,
+        "90.0":1130,
+        "95.0":1570,
+        "98.0":1834,
+        "99.0":1922,
+        "100.0":2010
+        },
+    ...
+```
+
+And cumulative distributions separately for different samplers:
+```javascript
+    ...
+    "cumulative_sampler_percentile":{
+        "ERROR503":{
+            "25.0":328,
+            "50.0":553,
+            "75.0":777,
+            "80.0":821,
+            "90.0":911,
+            "95.0":956,
+            "98.0":983,
+            "99.0":992,
+            "100.0":1000 //ERROR503 sampler fits in 1000ms for all test time
+        },
+        "ERROR_WO_RC":{
+            "25.0":689,
+            "50.0":1130,
+            "75.0":1570,
+            "80.0":1658,
+            "90.0":1834,
+            "95.0":1922,
+            "98.0":1975,
+            "99.0":1993,
+            "100.0":2010 //ERROR_WO_RC sampler fits in 2010ms for all test time
+        },
+        "ERROR502":{
+            "25.0":350,
+            "50.0":400,
+            "75.0":450,
+            "80.0":460,
+            "90.0":480,
+            "95.0":490,
+            "98.0":496,
+            "99.0":498,
+            "100.0":500
+            }
+        },
+    ...
+```
+
+####Interval Distribution
+JSON-object also may contains summary interval distribution
 
 ```javascript
     ...
