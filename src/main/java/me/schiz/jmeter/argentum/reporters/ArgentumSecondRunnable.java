@@ -112,7 +112,7 @@ public class ArgentumSecondRunnable implements Runnable {
         }
 
         for(float f: QUANTILES) {
-            result.put(f * 100, binarySearchMinIndex(generalShiftArray, (int)(this.throughput * f)));
+            result.put(f * 100, binarySearchMinIndex(generalShiftArray, f));
         }
 
         return result;
@@ -121,7 +121,7 @@ public class ArgentumSecondRunnable implements Runnable {
     private JSONObject calculateCumulativeTotalPercentile() {
         JSONObject result = new JSONObject();
         for(float f: QUANTILES) {
-            result.put(f * 100, binarySearchMinIndex(this.percentileShiftArray, (int)(totalResponseCounter * f)));
+            result.put(f * 100, binarySearchMinIndex(this.percentileShiftArray,  f));
         }
         return result;
     }
@@ -163,7 +163,7 @@ public class ArgentumSecondRunnable implements Runnable {
                 }
             }
             for(float f: QUANTILES) {
-                samplerPercentile.put(f * 100, binarySearchMinIndex(samplerShiftArray, (int)(samplerThroughput * f)));
+                samplerPercentile.put(f * 100, binarySearchMinIndex(samplerShiftArray, f));
             }
             result.put(sampler, samplerPercentile);
         }
@@ -176,7 +176,7 @@ public class ArgentumSecondRunnable implements Runnable {
         for(String sampler : titleMap.keySet()) {
             JSONObject samplerCumulativePercentile = new JSONObject();
             for(float f: QUANTILES) {
-                samplerCumulativePercentile.put(f * 100, binarySearchMinIndex(this.samplerCumulativeShiftArrayMap.get(sampler), (int)(samplerTotalCounterMap.get(sampler).get() * f)));
+                samplerCumulativePercentile.put(f * 100, binarySearchMinIndex(this.samplerCumulativeShiftArrayMap.get(sampler), f));
             }
             result.put(sampler, samplerCumulativePercentile);
         }
@@ -262,9 +262,11 @@ public class ArgentumSecondRunnable implements Runnable {
         }
     }
 
-    private static long binarySearchMinIndex(long []array, int x) {
+    private static long binarySearchMinIndex(long []array, float f) {
         int left = 0, right = array.length-1;
         int half_sum;
+        long x = (long)(array[right] * f);
+        if(x > array[right])    x = array[right];   //for case when x * 1.0f > x
         while (right - left > 1 ) {
             half_sum = (right + left) / 2;
             if(array[half_sum] >= x) right = half_sum;
