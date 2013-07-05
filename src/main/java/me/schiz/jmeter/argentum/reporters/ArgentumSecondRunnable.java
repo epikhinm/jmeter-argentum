@@ -20,15 +20,12 @@ public class ArgentumSecondRunnable implements Runnable {
     protected int active_threads;
     protected int throughput;
     protected ConcurrentHashMap<String, AtomicInteger> responseCodeMap;
-    //protected ConcurrentHashMap<String, AtomicInteger> titleMap;
     protected HashMap<String, Long> titleMap;
     protected ConcurrentHashMap<String, AtomicLong> sumRTSamplerMap;
     protected long sumRT;
     protected long sumLT;
     protected long inbound;
     protected long outbound;
-    protected AtomicIntegerArray intervalDistribution;
-    ConcurrentHashMap<String, AtomicIntegerArray> intervalDistSamplerMap;
     protected boolean infoCase;
     protected Writer writer;
     protected AtomicLongArray percentileDistArray;
@@ -51,14 +48,11 @@ public class ArgentumSecondRunnable implements Runnable {
                                   int active_threads,
                                   int throughput,
                                   ConcurrentHashMap<String, AtomicInteger> responseCodeMap,
-                                  ConcurrentHashMap<String, AtomicInteger> titleMap,
                                   long sumRT,
                                   ConcurrentHashMap<String, AtomicLong> sumRTSamplerMap,
                                   long sumLT,
                                   long inbound,
                                   long outbound,
-                                  AtomicIntegerArray intervalDistribution,
-                                  ConcurrentHashMap<String, AtomicIntegerArray> intervalDistSamplerMap,
                                   boolean infoCase,
                                   AtomicLongArray percentileDistArray, //for second percentile distribution
                                   long[] percentileShiftArray, // for overall percentile distribution
@@ -71,15 +65,12 @@ public class ArgentumSecondRunnable implements Runnable {
         this.active_threads = active_threads;
         this.throughput = throughput;
         this.responseCodeMap = responseCodeMap;
-        //this.titleMap = titleMap;
         this.titleMap = new HashMap<String, Long>();
         this.sumRT = sumRT;
         this.sumRTSamplerMap = sumRTSamplerMap;
         this.sumLT = sumLT;
         this.inbound = inbound;
         this.outbound = outbound;
-        this.intervalDistribution = intervalDistribution;
-        this.intervalDistSamplerMap = intervalDistSamplerMap;
         this.infoCase = infoCase;
 
         if(percentileDistArray != null) {
@@ -186,6 +177,48 @@ public class ArgentumSecondRunnable implements Runnable {
         return result;
     }
 
+    private ArrayList<JSONObject> calculateSecondTotalIntervalDistribution() {
+        long sum;
+        int prev = 0;
+        ArrayList<JSONObject> distList = new ArrayList<JSONObject>(TIME_PERIODS.length);
+        for(int i=0; i<TIME_PERIODS.length;++i) {
+            sum = 0;
+            for(int j=prev+1; j< TIME_PERIODS[i];j++) {
+                sum += this.percentileDistArray.get(j); //SSE ?
+            }
+            JSONObject interval = new JSONObject();
+            interval.put("from", prev);
+            interval.put("to", TIME_PERIODS[i]);
+            interval.put("count", sum);
+            prev = TIME_PERIODS[i];
+            distList.add(interval);
+        }
+        return distList;
+    }
+
+    private JSONObject calculateSamplerSecondTotalIntervalDistribution() {
+        JSONObject result = new JSONObject();
+        for(String sampler : samplerPercentileDistMap.keySet()) {
+            ArrayList<JSONObject> distList = new ArrayList<JSONObject>(TIME_PERIODS.length);
+            long sum;
+            int prev = 0;
+            for(int i=0; i<TIME_PERIODS.length;++i) {
+                sum = 0;
+                for(int j=prev+1; j< TIME_PERIODS[i];j++) {
+                    sum += this.samplerPercentileDistMap.get(sampler).get(j);
+                }
+                JSONObject interval = new JSONObject();
+                interval.put("from", prev);
+                interval.put("to", TIME_PERIODS[i]);
+                interval.put("count", sum);
+                prev = TIME_PERIODS[i];
+                distList.add(interval);
+            }
+            result.put(sampler, distList);
+        }
+        return result;
+    }
+
     @Override
     public void run() {
         try {
@@ -200,7 +233,6 @@ public class ArgentumSecondRunnable implements Runnable {
 
             jsonSecond.put("rc", responseCodeMap);
 
-            //if(titleMap.size() > 1 && infoCase)    do_really_case_info = true;
             jsonSecond.put("samplers", titleMap);
 
             JSONObject jsonTraffic = new JSONObject();
@@ -213,35 +245,8 @@ public class ArgentumSecondRunnable implements Runnable {
 
             if(TIME_PERIODS != null) {
                 log.info("calculate interval distribution");
-                int prev = 0;
-                ArrayList<JSONObject> summaryID = new ArrayList<JSONObject>(TIME_PERIODS.length);
-                for(int i = 0; i < TIME_PERIODS.length ; ++i) {
-                    JSONObject interval = new JSONObject();
-                    interval.put("from", prev);
-                    interval.put("to", TIME_PERIODS[i]);
-                    interval.put("count", intervalDistribution.get(i));
-                    summaryID.add(interval);
-
-                    prev = TIME_PERIODS[i];
-                }
-                jsonSecond.put("interval_dist", summaryID);
-
-
-                JSONObject fullPID = new JSONObject();
-                for(String title : intervalDistSamplerMap.keySet()) {
-                    ArrayList<JSONObject> titleID = new ArrayList<JSONObject>(TIME_PERIODS.length);
-                    prev = 0;
-                    for(int i = 0; i < TIME_PERIODS.length ; ++i) {
-                        JSONObject interval = new JSONObject();
-                        interval.put("from", prev);
-                        interval.put("to", TIME_PERIODS[i]);
-                        interval.put("count", intervalDistribution.get(i));
-                        titleID.add(interval);
-                        prev = TIME_PERIODS[i];
-                    }
-                    fullPID.put(title, titleID);
-                }
-                jsonSecond.put("sampler_interval_dist", fullPID);
+                jsonSecond.put("interval_dist", calculateSecondTotalIntervalDistribution());
+                jsonSecond.put("sampler_interval_dist", calculateSamplerSecondTotalIntervalDistribution());
             }
 
             if(QUANTILES != null) {
@@ -257,7 +262,6 @@ public class ArgentumSecondRunnable implements Runnable {
                 samplerAvgRTMap.put(sample, sumRTSamplerMap.get(sample).get() / titleMap.get(sample));
             }
             jsonSecond.put("sampler_avg_rt", samplerAvgRTMap);
-
 
             writer.write((jsonSecond.toJSONString() + "\n" ).toCharArray());
             writer.flush();
