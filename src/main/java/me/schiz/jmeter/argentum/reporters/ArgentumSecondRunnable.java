@@ -188,7 +188,7 @@ public class ArgentumSecondRunnable implements Runnable {
         ArrayList<JSONObject> distList = new ArrayList<JSONObject>(TIME_PERIODS.length);
         for(int i=0; i<TIME_PERIODS.length;++i) {
             sum = 0;
-            for(int j=prev+1; j< TIME_PERIODS[i];j++) {
+            for(int j=prev+1; j< TIME_PERIODS[i] &&  j < this.percentileDistArray.length();j++) {
                 sum += this.percentileDistArray.get(j); //SSE ?
             }
             JSONObject interval = new JSONObject();
@@ -209,7 +209,7 @@ public class ArgentumSecondRunnable implements Runnable {
             int prev = 0;
             for(int i=0; i<TIME_PERIODS.length;++i) {
                 sum = 0;
-                for(int j=prev+1; j< TIME_PERIODS[i];j++) {
+                for(int j=prev+1; j< TIME_PERIODS[i] && j < this.samplerPercentileDistMap.get(sampler).length();j++) {
                     sum += this.samplerPercentileDistMap.get(sampler).get(j);
                 }
                 JSONObject interval = new JSONObject();
@@ -248,13 +248,11 @@ public class ArgentumSecondRunnable implements Runnable {
             jsonSecond.put("traffic", jsonTraffic);
 
             if(TIME_PERIODS != null) {
-                log.info("calculate interval distribution");
                 jsonSecond.put("interval_dist", calculateSecondTotalIntervalDistribution());
                 jsonSecond.put("sampler_interval_dist", calculateSamplerSecondTotalIntervalDistribution());
             }
 
             if(QUANTILES != null) {
-                log.warn("calculate percentiles");
                 jsonSecond.put("percentile", calculateSecondTotalPercentile());
                 jsonSecond.put("sampler_percentile", calculateSecondSamplerPercentile());
                 jsonSecond.put("cumulative_percentile", calculateCumulativeTotalPercentile());
@@ -272,7 +270,6 @@ public class ArgentumSecondRunnable implements Runnable {
             writer.flush();
         } catch(Exception e) {
             log.error("Runnable exception", e);
-            log.error(e.getMessage());
         }
     }
 
