@@ -20,7 +20,8 @@ public class ArgentumSecondRunnable implements Runnable {
     protected int active_threads;
     protected int throughput;
     protected ConcurrentHashMap<String, AtomicInteger> responseCodeMap;
-    protected ConcurrentHashMap<String, AtomicInteger> titleMap;
+    //protected ConcurrentHashMap<String, AtomicInteger> titleMap;
+    protected HashMap<String, Long> titleMap;
     protected ConcurrentHashMap<String, AtomicLong> sumRTSamplerMap;
     protected long sumRT;
     protected long sumLT;
@@ -70,7 +71,8 @@ public class ArgentumSecondRunnable implements Runnable {
         this.active_threads = active_threads;
         this.throughput = throughput;
         this.responseCodeMap = responseCodeMap;
-        this.titleMap = titleMap;
+        //this.titleMap = titleMap;
+        this.titleMap = new HashMap<String, Long>();
         this.sumRT = sumRT;
         this.sumRTSamplerMap = sumRTSamplerMap;
         this.sumLT = sumLT;
@@ -129,7 +131,7 @@ public class ArgentumSecondRunnable implements Runnable {
     private JSONObject calculateSecondSamplerPercentile() {
         JSONObject result = new JSONObject();
 
-        for(String sampler : titleMap.keySet()) {
+        for(String sampler : samplerPercentileDistMap.keySet()) {
             JSONObject samplerPercentile = new JSONObject();
 
             AtomicLongArray samplerDistribution = samplerPercentileDistMap.get(sampler);
@@ -146,7 +148,7 @@ public class ArgentumSecondRunnable implements Runnable {
                 samplerTotalCounterMap.put(sampler, samplerCounter);
             }
 
-            int samplerThroughput = 0;
+            long samplerThroughput = 0;
             long i_rCount;
             long[] samplerShiftArray = new long[timeout*1000 + 1];
             for(int i = 0; i < samplerDistribution.length() ; ++i) {
@@ -162,6 +164,7 @@ public class ArgentumSecondRunnable implements Runnable {
                     samplerCounter.getAndAdd(i_rCount);
                 }
             }
+            this.titleMap.put(sampler, samplerThroughput);
             for(float f: QUANTILES) {
                 samplerPercentile.put(f * 100, binarySearchMinIndex(samplerShiftArray, f));
             }
@@ -173,7 +176,7 @@ public class ArgentumSecondRunnable implements Runnable {
 
     public JSONObject calculateCumulativeSamplerPercentile() {
         JSONObject result = new JSONObject();
-        for(String sampler : titleMap.keySet()) {
+        for(String sampler : samplerPercentileDistMap.keySet()) {
             JSONObject samplerCumulativePercentile = new JSONObject();
             for(float f: QUANTILES) {
                 samplerCumulativePercentile.put(f * 100, binarySearchMinIndex(this.samplerCumulativeShiftArrayMap.get(sampler), f));
@@ -192,12 +195,6 @@ public class ArgentumSecondRunnable implements Runnable {
             jsonSecond.put("th", throughput);
             jsonSecond.put("avg_rt", (sumRT / throughput));
 
-            LinkedHashMap<String, Long> samplerAvgRTMap = new LinkedHashMap<String, Long>();
-            for(String sample : sumRTSamplerMap.keySet()) {
-                samplerAvgRTMap.put(sample, sumRTSamplerMap.get(sample).get() / titleMap.get(sample).get());
-            }
-
-            jsonSecond.put("sampler_avg_rt", samplerAvgRTMap);
             jsonSecond.put("avg_lt", (sumLT / throughput));
             jsonSecond.put("active_threads", active_threads);
 
@@ -254,6 +251,14 @@ public class ArgentumSecondRunnable implements Runnable {
                 jsonSecond.put("cumulative_percentile", calculateCumulativeTotalPercentile());
                 jsonSecond.put("cumulative_sampler_percentile", calculateCumulativeSamplerPercentile());
             }
+
+            LinkedHashMap<String, Long> samplerAvgRTMap = new LinkedHashMap<String, Long>();
+            for(String sample : sumRTSamplerMap.keySet()) {
+                samplerAvgRTMap.put(sample, sumRTSamplerMap.get(sample).get() / titleMap.get(sample));
+            }
+            jsonSecond.put("sampler_avg_rt", samplerAvgRTMap);
+
+
             writer.write((jsonSecond.toJSONString() + "\n" ).toCharArray());
             writer.flush();
         } catch(Exception e) {
