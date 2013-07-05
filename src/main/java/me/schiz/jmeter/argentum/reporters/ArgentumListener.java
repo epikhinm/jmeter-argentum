@@ -48,9 +48,6 @@ public class ArgentumListener extends AbstractListenerElement
 
     protected ConcurrentHashMap<String, AtomicLong> samplerTotalCounterMap;
 
-//    protected volatile boolean isCalcQuantileDist = false;
-//    protected volatile boolean isCalcIntervalDist = false;
-
     static String RC_OK = "200";
     static String RC_ERROR = "500";
 
@@ -113,10 +110,8 @@ public class ArgentumListener extends AbstractListenerElement
             throughputMap.put(second, new AtomicInteger(0));
             sumLTMap.put(second, new AtomicLong(0));
             responseCodeMap.put(second, new ConcurrentHashMap<String, AtomicInteger>());
-            //if(isCalcQuantileDist) {
             percentileDistMap.put(second, new AtomicLongArray(getTimeout() * 1000 + 1));
             samplerPercentileDistMap.put(second, new ConcurrentHashMap<String, AtomicLongArray>());
-            //}
             sumInboundTraffic.put(second, new AtomicLong(0));
             sumOutboundTraffic.put(second, new AtomicLong(0));
 
@@ -198,8 +193,6 @@ public class ArgentumListener extends AbstractListenerElement
             if(!createSecond(start)) {
                 log.error("aggregation timeout");
                 return;
-            } else {
-                log.info("second created");
             }
         }
         throughputMap.get(start).incrementAndGet();
