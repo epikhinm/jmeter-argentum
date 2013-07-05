@@ -37,8 +37,6 @@ public class ArgentumListener extends AbstractListenerElement
     protected ConcurrentHashMap<Long, Integer> threadsMap; //for active_threads metric
     protected ConcurrentHashMap<Long, AtomicInteger> throughputMap;  //for throughput metric
     protected ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicInteger>> responseCodeMap;   //ReturnCode -> Count per second map
-    protected ConcurrentHashMap<Long, AtomicLong> sumRTMap;  //for average response time metric
-    protected ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicLong>> sumRTSamplerMap;  //for average response time per sampler metric
     protected ConcurrentHashMap<Long, AtomicLong> sumLTMap;  //for average latency metric
     protected ConcurrentHashMap<Long, AtomicLong> sumInboundTraffic; // for avg inbound traffic metric
     protected ConcurrentHashMap<Long, AtomicLong> sumOutboundTraffic; // for avg outbound traffic metric
@@ -114,8 +112,6 @@ public class ArgentumListener extends AbstractListenerElement
             }
             threadsMap.put(second, JMeterContextService.getNumberOfThreads());
             throughputMap.put(second, new AtomicInteger(0));
-            sumRTMap.put(second, new AtomicLong(0));
-            sumRTSamplerMap.put(second, new ConcurrentHashMap<String, AtomicLong>());
             sumLTMap.put(second, new AtomicLong(0));
             responseCodeMap.put(second, new ConcurrentHashMap<String, AtomicInteger>());
             if(isCalcQuantileDist) {
@@ -140,8 +136,6 @@ public class ArgentumListener extends AbstractListenerElement
                         threadsMap.get(rSecond), //active_threads
                         throughputMap.get(rSecond).get(), //throughput
                         responseCodeMap.get(rSecond),
-                        sumRTMap.get(rSecond).get(),
-                        sumRTSamplerMap.get(rSecond),
                         sumLTMap.get(rSecond).get(),
                         sumInboundTraffic.get(rSecond).get(),
                         sumOutboundTraffic.get(rSecond).get(),
@@ -158,8 +152,6 @@ public class ArgentumListener extends AbstractListenerElement
 
             threadsMap.remove(rSecond);
             throughputMap.remove(rSecond);
-            sumRTMap.remove(rSecond);
-            sumRTSamplerMap.remove(rSecond);
             sumLTMap.remove(rSecond);
             responseCodeMap.remove(rSecond);
             sumInboundTraffic.remove(rSecond);
@@ -171,17 +163,6 @@ public class ArgentumListener extends AbstractListenerElement
 
         }
         return true;
-    }
-
-    private void addSamplerToSumRTSamplerMap(Long second, String sampler, int rt) {
-        ConcurrentHashMap<String, AtomicLong> cursor = sumRTSamplerMap.get(second);
-        if(cursor.get(sampler) == null) {
-            // Sorry guys. It's really pain.
-            synchronized (sumRTSamplerMap) {
-                if(cursor.get(sampler) == null)  cursor.put(sampler, new AtomicLong(rt));
-                else cursor.get(sampler).getAndAdd(rt);
-            }
-        } else cursor.get(sampler).getAndAdd(rt);
     }
 
     private void addRCtoMap(Long second, String rc) {
@@ -226,9 +207,7 @@ public class ArgentumListener extends AbstractListenerElement
             }
         }
         throughputMap.get(start).incrementAndGet();
-        sumRTMap.get(start).getAndAdd(rt);
         sumLTMap.get(start).getAndAdd(sampleEvent.getResult().getLatency());
-        addSamplerToSumRTSamplerMap(start, samplerName, rt);
         addRCtoMap(start, convertResponseCode(sr));
         sumInboundTraffic.get(start).getAndAdd(sampleEvent.getResult().getBodySize());
         sumOutboundTraffic.get(start).getAndAdd(sampleEvent.getResult().getHeadersSize());
@@ -262,8 +241,6 @@ public class ArgentumListener extends AbstractListenerElement
         secSet = new ConcurrentSkipListSet<Long>();
         threadsMap = new ConcurrentHashMap<Long, Integer>(getTimeout() + floatingSeconds);
         throughputMap = new ConcurrentHashMap<Long, AtomicInteger>(getTimeout() + floatingSeconds);
-        sumRTMap = new ConcurrentHashMap<Long, AtomicLong>(getTimeout() + floatingSeconds);
-        sumRTSamplerMap = new ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicLong>>(getTimeout() + floatingSeconds);
         sumLTMap = new ConcurrentHashMap<Long, AtomicLong>(getTimeout() + floatingSeconds);
         responseCodeMap = new ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicInteger>>(getTimeout() + floatingSeconds);
         sumInboundTraffic = new ConcurrentHashMap<Long, AtomicLong>(getTimeout() + floatingSeconds);
@@ -318,8 +295,6 @@ public class ArgentumListener extends AbstractListenerElement
                         threadsMap.get(rSecond),
                         throughputMap.get(rSecond).get(), //throughput
                         responseCodeMap.get(rSecond),
-                        sumRTMap.get(rSecond).get(),
-                        sumRTSamplerMap.get(rSecond),
                         sumLTMap.get(rSecond).get(),
                         sumInboundTraffic.get(rSecond).get(),
                         sumOutboundTraffic.get(rSecond).get(),
@@ -336,8 +311,6 @@ public class ArgentumListener extends AbstractListenerElement
 
             threadsMap.remove(rSecond);
             throughputMap.remove(rSecond);
-            sumRTMap.remove(rSecond);
-            sumRTSamplerMap.remove(rSecond);
             sumLTMap.remove(rSecond);
             responseCodeMap.remove(rSecond);
             sumInboundTraffic.remove(rSecond);

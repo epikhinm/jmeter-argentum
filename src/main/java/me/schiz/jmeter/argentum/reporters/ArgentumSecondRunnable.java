@@ -21,7 +21,7 @@ public class ArgentumSecondRunnable implements Runnable {
     protected int throughput;
     protected ConcurrentHashMap<String, AtomicInteger> responseCodeMap;
     protected HashMap<String, Long> titleMap;
-    protected ConcurrentHashMap<String, AtomicLong> sumRTSamplerMap;
+    protected HashMap<String, AtomicLong> sumRTSamplerMap;
     protected long sumRT;
     protected long sumLT;
     protected long inbound;
@@ -48,8 +48,6 @@ public class ArgentumSecondRunnable implements Runnable {
                                   int active_threads,
                                   int throughput,
                                   ConcurrentHashMap<String, AtomicInteger> responseCodeMap,
-                                  long sumRT,
-                                  ConcurrentHashMap<String, AtomicLong> sumRTSamplerMap,
                                   long sumLT,
                                   long inbound,
                                   long outbound,
@@ -66,8 +64,8 @@ public class ArgentumSecondRunnable implements Runnable {
         this.throughput = throughput;
         this.responseCodeMap = responseCodeMap;
         this.titleMap = new HashMap<String, Long>();
-        this.sumRT = sumRT;
-        this.sumRTSamplerMap = sumRTSamplerMap;
+        this.sumRT = 0;
+        this.sumRTSamplerMap = new HashMap<String, AtomicLong>();
         this.sumLT = sumLT;
         this.inbound = inbound;
         this.outbound = outbound;
@@ -101,6 +99,7 @@ public class ArgentumSecondRunnable implements Runnable {
                 for(int j=i;j<percentileShiftArray.length;++j) {
                     percentileShiftArray[j] += i_rCount; // for cumulative distribution
                 }
+                sumRT += i_rCount * i;
             }
         }
 
@@ -142,6 +141,11 @@ public class ArgentumSecondRunnable implements Runnable {
             long samplerThroughput = 0;
             long i_rCount;
             long[] samplerShiftArray = new long[timeout*1000 + 1];
+            AtomicLong sumRTSamplerCounter = sumRTSamplerMap.get(sampler);
+            if(sumRTSamplerCounter == null) {
+                sumRTSamplerCounter = new AtomicLong(0);
+                sumRTSamplerMap.put(sampler, sumRTSamplerCounter);
+            }
             for(int i = 0; i < samplerDistribution.length() ; ++i) {
                 i_rCount = samplerDistribution.get(i);
                 if(i_rCount > 0) {
@@ -153,6 +157,7 @@ public class ArgentumSecondRunnable implements Runnable {
                     }
                     samplerThroughput += i_rCount;
                     samplerCounter.getAndAdd(i_rCount);
+                    sumRTSamplerMap.get(sampler) .addAndGet(i_rCount * i);
                 }
             }
             this.titleMap.put(sampler, samplerThroughput);
@@ -226,7 +231,6 @@ public class ArgentumSecondRunnable implements Runnable {
 
             jsonSecond.put("second", second);
             jsonSecond.put("th", throughput);
-            jsonSecond.put("avg_rt", (sumRT / throughput));
 
             jsonSecond.put("avg_lt", (sumLT / throughput));
             jsonSecond.put("active_threads", active_threads);
@@ -262,6 +266,7 @@ public class ArgentumSecondRunnable implements Runnable {
                 samplerAvgRTMap.put(sample, sumRTSamplerMap.get(sample).get() / titleMap.get(sample));
             }
             jsonSecond.put("sampler_avg_rt", samplerAvgRTMap);
+            jsonSecond.put("avg_rt", (sumRT / throughput));
 
             writer.write((jsonSecond.toJSONString() + "\n" ).toCharArray());
             writer.flush();
