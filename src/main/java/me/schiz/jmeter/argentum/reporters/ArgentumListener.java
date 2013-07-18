@@ -22,8 +22,6 @@ public class ArgentumListener extends AbstractListenerElement
 
     private static final Logger log  = LoggingManager.getLoggerForClass();
 
-    protected volatile int max_th = 1000;
-
     public final static int floatingSeconds = 2;
     public static String outputFileName = "ArgentumListener.OutputFileName";
     public static String timeout = "ArgentumListener.timeout";
@@ -33,25 +31,26 @@ public class ArgentumListener extends AbstractListenerElement
     private volatile boolean started = false;
     protected BufferedWriter writer;
 
-    protected ConcurrentSkipListSet<Long> secSet;
-    protected ConcurrentHashMap<Long, Integer> threadsMap; //for active_threads metric
-    protected ConcurrentHashMap<Long, AtomicInteger> throughputMap;  //for throughput metric
-    protected ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicInteger>> responseCodeMap;   //ReturnCode -> Count per second map
-    protected ConcurrentHashMap<Long, AtomicLong> sumLTMap;  //for average latency metric
-    protected ConcurrentHashMap<Long, AtomicLong> sumInboundTraffic; // for avg inbound traffic metric
-    protected ConcurrentHashMap<Long, AtomicLong> sumOutboundTraffic; // for avg outbound traffic metric
+    //public needs for runnable
+    public ConcurrentSkipListSet<Long> secSet;
+    public ConcurrentHashMap<Long, Integer> threadsMap; //for active_threads metric
+    public ConcurrentHashMap<Long, AtomicInteger> throughputMap;  //for throughput metric
+    public ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicInteger>> responseCodeMap;   //ReturnCode -> Count per second map
+    public ConcurrentHashMap<Long, AtomicLong> sumLTMap;  //for average latency metric
+    public ConcurrentHashMap<Long, AtomicLong> sumInboundTraffic; // for avg inbound traffic metric
+    public ConcurrentHashMap<Long, AtomicLong> sumOutboundTraffic; // for avg outbound traffic metric
 
-    protected ConcurrentHashMap<Long, AtomicLongArray> percentileDistMap; //seconds map for cumulative percentile distribution
-    protected long[]    percentileDistShiftArray; //shift-array for cumulative percentile distribution
-    protected ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicLongArray>>   samplerPercentileDistMap;
-    protected ConcurrentHashMap<String, long[]>    samplerCumulativePercentileShiftArray;
+    public ConcurrentHashMap<Long, AtomicLongArray> percentileDistMap; //seconds map for cumulative percentile distribution
+    public long[]    percentileDistShiftArray; //shift-array for cumulative percentile distribution
+    public ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicLongArray>>   samplerPercentileDistMap;
+    public ConcurrentHashMap<String, long[]>    samplerCumulativePercentileShiftArray;
 
-    protected ConcurrentHashMap<String, AtomicLong> samplerTotalCounterMap;
+    public ConcurrentHashMap<String, AtomicLong> samplerTotalCounterMap;
 
     static String RC_OK = "200";
     static String RC_ERROR = "500";
 
-    protected static ExecutorService executors;
+    protected static ScheduledExecutorService executors;
 
     public void setOutputFileName(String filename) {
         setProperty(outputFileName, filename);
@@ -72,7 +71,7 @@ public class ArgentumListener extends AbstractListenerElement
                 percs[j++] = Float.parseFloat(time);
             }
         } catch (NumberFormatException nfe) {
-            return ArgentumSecondRunnable.DEFAULT_QUANTILES;
+            return ScheduledArgentumRunnable.DEFAULT_QUANTILES;
         }
         return percs;
     }
@@ -89,7 +88,7 @@ public class ArgentumListener extends AbstractListenerElement
                 time_periods[j++] = Integer.parseInt(time);
             }
         } catch (NumberFormatException nfe) {
-            return ArgentumSecondRunnable.DEFAULT_TIME_PERIODS;
+            return ScheduledArgentumRunnable.DEFAULT_TIME_PERIODS;
         }
         return time_periods;
     }
@@ -116,42 +115,6 @@ public class ArgentumListener extends AbstractListenerElement
             sumOutboundTraffic.put(second, new AtomicLong(0));
 
             secSet.add(second);
-        }
-
-        if(secSet.size() > getTimeout()) {
-            Long rSecond = secSet.pollFirst();
-
-            int th = throughputMap.get(rSecond).get();
-            if(th > max_th) max_th = th;
-
-            if(executors != null) {
-                log.info("execute new second");
-                executors.execute(new ArgentumSecondRunnable(rSecond, //second
-                        threadsMap.get(rSecond), //active_threads
-                        throughputMap.get(rSecond).get(), //throughput
-                        responseCodeMap.get(rSecond),
-                        sumLTMap.get(rSecond).get(),
-                        sumInboundTraffic.get(rSecond).get(),
-                        sumOutboundTraffic.get(rSecond).get(),
-                        true, //case distributions
-                        percentileDistMap.get(rSecond),
-                        percentileDistShiftArray,
-                        samplerPercentileDistMap.get(rSecond),
-                        samplerCumulativePercentileShiftArray,
-                        samplerTotalCounterMap,
-                        writer,
-                        getTimeout()
-                ));
-            } else log.warn("Not found executors");
-
-            threadsMap.remove(rSecond);
-            throughputMap.remove(rSecond);
-            sumLTMap.remove(rSecond);
-            responseCodeMap.remove(rSecond);
-            sumInboundTraffic.remove(rSecond);
-            sumOutboundTraffic.remove(rSecond);
-            percentileDistMap.remove(rSecond);
-            samplerPercentileDistMap.remove(rSecond);
         }
         return true;
     }
@@ -196,10 +159,10 @@ public class ArgentumListener extends AbstractListenerElement
             }
         }
         throughputMap.get(start).incrementAndGet();
-        sumLTMap.get(start).getAndAdd(sampleEvent.getResult().getLatency());
+        sumLTMap.get(start).getAndAdd(sr.getLatency());
         addRCtoMap(start, convertResponseCode(sr));
-        sumInboundTraffic.get(start).getAndAdd(sampleEvent.getResult().getBodySize());
-        sumOutboundTraffic.get(start).getAndAdd(sampleEvent.getResult().getHeadersSize());
+        sumInboundTraffic.get(start).getAndAdd(sr.getBodySize());
+        sumOutboundTraffic.get(start).getAndAdd(sr.getHeadersSize());
 
         percentileDistMap.get(start).getAndIncrement(rt);
         addToSamplerDistMap(start, samplerName, rt);
@@ -235,7 +198,7 @@ public class ArgentumListener extends AbstractListenerElement
         samplerTotalCounterMap = new ConcurrentHashMap<String, AtomicLong>();
 
         if(getPercentiles() != null) {
-            ArgentumSecondRunnable.QUANTILES = getPercentiles();
+            ScheduledArgentumRunnable.QUANTILES = getPercentiles();
             //For cumulative percentiles
             percentileDistMap = new ConcurrentHashMap<Long, AtomicLongArray>(getTimeout() + floatingSeconds);
             percentileDistShiftArray = new long[getTimeout()*1000 + 1];
@@ -244,22 +207,24 @@ public class ArgentumListener extends AbstractListenerElement
 
         }
         if(getTimePeriods() != null) {
-            ArgentumSecondRunnable.TIME_PERIODS = getTimePeriods();
+            ScheduledArgentumRunnable.TIME_PERIODS = getTimePeriods();
 
-            if(ArgentumSecondRunnable.TIME_PERIODS[ArgentumSecondRunnable.TIME_PERIODS.length - 1] < getTimeout()) {
-                int new_time_periods[] = new int[ArgentumSecondRunnable.TIME_PERIODS.length + 1];
+            if(ScheduledArgentumRunnable.TIME_PERIODS[ScheduledArgentumRunnable.TIME_PERIODS.length - 1] < getTimeout()) {
+                int new_time_periods[] = new int[ScheduledArgentumRunnable.TIME_PERIODS.length + 1];
                 //Hmmm. Sorry for that
-                for(int i = 0; i < ArgentumSecondRunnable.TIME_PERIODS.length ;++i) {
-                    new_time_periods[i] = ArgentumSecondRunnable.TIME_PERIODS[i];
+                for(int i = 0; i < ScheduledArgentumRunnable.TIME_PERIODS.length ;++i) {
+                    new_time_periods[i] = ScheduledArgentumRunnable.TIME_PERIODS[i];
                 }
-                new_time_periods[ArgentumSecondRunnable.TIME_PERIODS.length] = getTimeout();
-                ArgentumSecondRunnable.TIME_PERIODS = new_time_periods;
+                new_time_periods[ScheduledArgentumRunnable.TIME_PERIODS.length] = getTimeout();
+                ScheduledArgentumRunnable.TIME_PERIODS = new_time_periods;
             }
         }
 
         if(executors == null) {
             synchronized (this.getClass()) {
-                if(executors == null) executors = Executors.newSingleThreadExecutor();
+                //if(executors == null) executors = Executors.newSingleThreadExecutor();
+                if(executors == null)   executors = Executors.newScheduledThreadPool(1);
+                executors.scheduleAtFixedRate(new ScheduledArgentumRunnable(this, writer), (getTimeout() - 1) * 1000, 500, TimeUnit.MILLISECONDS);
             }
         }
         started = true;
@@ -273,35 +238,7 @@ public class ArgentumListener extends AbstractListenerElement
     @Override
     public void testEnded() {
         while(secSet.size() > 0) {
-            Long rSecond = secSet.pollFirst();
-
-            if(executors != null) {
-                executors.execute(new ArgentumSecondRunnable(rSecond, //second
-                        threadsMap.get(rSecond),
-                        throughputMap.get(rSecond).get(), //throughput
-                        responseCodeMap.get(rSecond),
-                        sumLTMap.get(rSecond).get(),
-                        sumInboundTraffic.get(rSecond).get(),
-                        sumOutboundTraffic.get(rSecond).get(),
-                        true, //case distributions
-                        percentileDistMap.get(rSecond),
-                        percentileDistShiftArray,
-                        samplerPercentileDistMap.get(rSecond),
-                        samplerCumulativePercentileShiftArray,
-                        samplerTotalCounterMap,
-                        writer,
-                        getTimeout()
-                ));
-            } else log.warn("Not found executors");
-
-            threadsMap.remove(rSecond);
-            throughputMap.remove(rSecond);
-            sumLTMap.remove(rSecond);
-            responseCodeMap.remove(rSecond);
-            sumInboundTraffic.remove(rSecond);
-            sumOutboundTraffic.remove(rSecond);
-            percentileDistMap.remove(rSecond);
-            samplerPercentileDistMap.remove(rSecond);
+            //last second may be dropped
         }
         if(executors != null) {
             synchronized (this.getClass()) {
