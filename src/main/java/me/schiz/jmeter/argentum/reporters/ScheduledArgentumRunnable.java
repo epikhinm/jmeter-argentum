@@ -26,7 +26,6 @@ public class ScheduledArgentumRunnable implements Runnable {
     protected long sumLT;
     protected long inbound;
     protected long outbound;
-    protected boolean infoCase;
     protected Writer writer;
     protected AtomicLongArray percentileDistArray;
     protected long[] percentileShiftArray;
@@ -37,7 +36,7 @@ public class ScheduledArgentumRunnable implements Runnable {
 
     protected int timeout;
 
-    static long totalResponseCounter;   //deprecated
+    static int append_agg_timeout = 2; //2s
 
     static float[] QUANTILES = null;
     static int[] TIME_PERIODS = null;
@@ -51,13 +50,15 @@ public class ScheduledArgentumRunnable implements Runnable {
     }
 
     public boolean check() {
-        if(this.listener.secSet.first() + this.listener.getTimeout() >= (System.currentTimeMillis() / 1000)) {
+        if(this.listener.secSet.first() + this.listener.getTimeout() + append_agg_timeout > (System.currentTimeMillis() / 1000)) {
+            log.debug("failure check, first " + this.listener.secSet.first() + " + timeout " + this.listener.getTimeout() + "> " + (System.currentTimeMillis() / 1000));
             return false;
         } else {
+            log.debug("time: " + (System.currentTimeMillis() / 1000) + " queue: " + this.listener.secSet.toString());
 
             this.second = this.listener.secSet.pollFirst();
             this.active_threads = this.listener.threadsMap.get(this.second);
-            this.throughput = this.listener.throughputMap.get(this.second).get();
+            this.throughput = 1;
             this.responseCodeMap = this.listener.responseCodeMap.get(this.second);
             this.titleMap = new HashMap<String, Long>();
             this.sumRTSamplerMap = new HashMap<String, AtomicLong>();
@@ -65,7 +66,6 @@ public class ScheduledArgentumRunnable implements Runnable {
             this.sumLT = this.listener.sumLTMap.get(this.second).get();
             this.inbound = this.listener.sumInboundTraffic.get(this.second).get();
             this.outbound = this.listener.sumOutboundTraffic.get(this.second).get();
-            this.infoCase = true;
             this.percentileDistArray = this.listener.percentileDistMap.get(this.second);
             this.percentileShiftArray = this.listener.percentileDistShiftArray;
             this.samplerPercentileDistMap = this.listener.samplerPercentileDistMap.get(this.second);
@@ -78,7 +78,6 @@ public class ScheduledArgentumRunnable implements Runnable {
 
     public void delete() {
         this.listener.threadsMap.remove(this.second);
-        this.listener.throughputMap.remove(this.second);
         this.listener.sumLTMap.remove(this.second);
         this.listener.responseCodeMap.remove(this.second);
         this.listener.sumInboundTraffic.remove(this.second);
@@ -95,11 +94,9 @@ public class ScheduledArgentumRunnable implements Runnable {
         for(int i = 0; i < percentileDistArray.length() ; ++i) {
             i_rCount = percentileDistArray.get(i);
             if(i_rCount > 0) {
-                totalResponseCounter += i_rCount;
-                for(int j = i; j < generalShiftArray.length; ++j)  {
+                this.throughput += i_rCount;
+                for(int j=i; j < generalShiftArray.length; ++j)  {
                     generalShiftArray[j] += i_rCount; //What about SSE?:)
-                }
-                for(int j=i;j<percentileShiftArray.length;++j) {
                     percentileShiftArray[j] += i_rCount; // for cumulative distribution
                 }
                 sumRT += i_rCount * i;
@@ -124,6 +121,8 @@ public class ScheduledArgentumRunnable implements Runnable {
     private JSONObject calculateSecondSamplerPercentile() {
         JSONObject result = new JSONObject();
 
+        long zero = 0;
+
         for(String sampler : samplerPercentileDistMap.keySet()) {
             JSONObject samplerPercentile = new JSONObject();
 
@@ -133,7 +132,7 @@ public class ScheduledArgentumRunnable implements Runnable {
 
             if(cumulativeShiftArray == null) {
                 cumulativeShiftArray = new long[timeout*1000 + 1];
-                Arrays.fill(cumulativeShiftArray, Long.valueOf(0));
+                Arrays.fill(cumulativeShiftArray, zero);
                 samplerCumulativeShiftArrayMap.put(sampler, cumulativeShiftArray);
             }
             if(samplerCounter == null) {
@@ -191,7 +190,7 @@ public class ScheduledArgentumRunnable implements Runnable {
         ArrayList<JSONObject> distList = new ArrayList<JSONObject>(TIME_PERIODS.length);
         for(int i=0; i<TIME_PERIODS.length;++i) {
             sum = 0;
-            for(int j=prev+1; j<= TIME_PERIODS[i] && j < this.percentileDistArray.length();j++) {
+            for(int j=prev; j< TIME_PERIODS[i] && j < this.percentileDistArray.length();++j) {
                 sum += this.percentileDistArray.get(j); //SSE ?
             }
             JSONObject interval = new JSONObject();
@@ -212,7 +211,7 @@ public class ScheduledArgentumRunnable implements Runnable {
             int prev = 0;
             for(int i=0; i<TIME_PERIODS.length;++i) {
                 sum = 0;
-                for(int j=prev+1; j< TIME_PERIODS[i] && j < this.samplerPercentileDistMap.get(sampler).length();j++) {
+                for(int j=prev; j < TIME_PERIODS[i] && j < this.samplerPercentileDistMap.get(sampler).length();j++) {
                     sum += this.samplerPercentileDistMap.get(sampler).get(j);
                 }
                 JSONObject interval = new JSONObject();
@@ -238,13 +237,11 @@ public class ScheduledArgentumRunnable implements Runnable {
 
             jsonSecond.put("time", System.currentTimeMillis()/1000);
             jsonSecond.put("second", second);
-            jsonSecond.put("th", throughput);
 
             jsonSecond.put("avg_lt", (sumLT / throughput));
             jsonSecond.put("active_threads", active_threads);
 
             jsonSecond.put("rc", responseCodeMap);
-
             jsonSecond.put("samplers", titleMap);
 
             JSONObject jsonTraffic = new JSONObject();
@@ -270,6 +267,7 @@ public class ScheduledArgentumRunnable implements Runnable {
             for(String sample : sumRTSamplerMap.keySet()) {
                 samplerAvgRTMap.put(sample, sumRTSamplerMap.get(sample).get() / titleMap.get(sample));
             }
+            jsonSecond.put("th", throughput);
             jsonSecond.put("sampler_avg_rt", samplerAvgRTMap);
             jsonSecond.put("avg_rt", (sumRT / throughput));
 
@@ -278,7 +276,7 @@ public class ScheduledArgentumRunnable implements Runnable {
         } catch(Exception e) {
             log.error("Runnable exception", e);
         } finally {
-            //delete();
+            delete();
         }
     }
 
