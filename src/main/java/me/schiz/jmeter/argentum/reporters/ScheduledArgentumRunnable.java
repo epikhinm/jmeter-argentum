@@ -83,7 +83,9 @@ public class ScheduledArgentumRunnable implements Runnable {
         this.listener.sumInboundTraffic.remove(this.second);
         this.listener.sumOutboundTraffic.remove(this.second);
         this.listener.percentileDistMap.remove(this.second);
-        samplerPercentileDistMap.remove(this.second);
+        this.listener.samplerPercentileDistMap.remove(this.second);
+        this.listener.samplerTotalCounterMap.remove(this.second);
+        samplerPercentileDistMap = null;
     }
 
     private JSONObject calculateSecondTotalPercentile() {
