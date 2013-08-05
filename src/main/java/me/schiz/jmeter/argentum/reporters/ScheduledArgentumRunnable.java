@@ -5,7 +5,9 @@ import org.apache.log.Logger;
 import org.json.simple.JSONObject;
 
 import java.io.Writer;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -20,7 +22,7 @@ public class ScheduledArgentumRunnable implements Runnable {
     protected int active_threads;
     protected int throughput;
     protected ConcurrentHashMap<String, AtomicInteger> responseCodeMap;
-    protected HashMap<String, Long> titleMap;
+    protected HashMap<String, Integer> titleMap;
     protected HashMap<String, AtomicLong> sumRTSamplerMap;
     protected long sumRT;
     protected long sumLT;
@@ -60,7 +62,7 @@ public class ScheduledArgentumRunnable implements Runnable {
             this.active_threads = this.listener.threadsMap.get(this.second);
             this.throughput = 1;
             this.responseCodeMap = this.listener.responseCodeMap.get(this.second);
-            this.titleMap = new HashMap<String, Long>();
+            this.titleMap = new HashMap<String, Integer>();
             this.sumRTSamplerMap = new HashMap<String, AtomicLong>();
             this.sumRT = 0;
             this.sumLT = this.listener.sumLTMap.get(this.second).get();
@@ -88,8 +90,8 @@ public class ScheduledArgentumRunnable implements Runnable {
         samplerPercentileDistMap = null;
     }
 
-    private JSONObject calculateSecondTotalPercentile() {
-        JSONObject result = new JSONObject();
+    private HashMap<String, Integer> calculateSecondTotalPercentile() {
+        HashMap<String, Integer> result = new HashMap(QUANTILES.length);
 
         long i_rCount;
         long[] generalShiftArray = new long[timeout*1000 + 1];
@@ -106,27 +108,27 @@ public class ScheduledArgentumRunnable implements Runnable {
         }
 
         for(float f: QUANTILES) {
-            result.put(f * 100, binarySearchMinIndex(generalShiftArray, f));
+            result.put(String.valueOf(f * 100), (int) binarySearchMinIndex(generalShiftArray, f));
         }
 
         return result;
     }
 
-    private JSONObject calculateCumulativeTotalPercentile() {
-        JSONObject result = new JSONObject();
+    private HashMap<String, Integer> calculateCumulativeTotalPercentile() {
+        HashMap<String, Integer> result = new HashMap<String, Integer>(QUANTILES.length);
         for(float f: QUANTILES) {
-            result.put(f * 100, binarySearchMinIndex(this.percentileShiftArray,  f));
+            result.put(String.valueOf(f * 100), (int)binarySearchMinIndex(this.percentileShiftArray,  f));
         }
         return result;
     }
 
-    private JSONObject calculateSecondSamplerPercentile() {
-        JSONObject result = new JSONObject();
+    private HashMap<String, HashMap<String, Integer>> calculateSecondSamplerPercentile() {
+        HashMap<String, HashMap<String, Integer>> result = new HashMap<String, HashMap<String, Integer>>(samplerPercentileDistMap.size());
 
         long zero = 0;
 
         for(String sampler : samplerPercentileDistMap.keySet()) {
-            JSONObject samplerPercentile = new JSONObject();
+            HashMap<String, Integer> samplerPercentile = new HashMap<String, Integer>(QUANTILES.length);
 
             AtomicLongArray samplerDistribution = samplerPercentileDistMap.get(sampler);
             long[] cumulativeShiftArray = samplerCumulativeShiftArrayMap.get(sampler);
@@ -164,9 +166,9 @@ public class ScheduledArgentumRunnable implements Runnable {
                     sumRTSamplerMap.get(sampler) .addAndGet(i_rCount * i);
                 }
             }
-            this.titleMap.put(sampler, samplerThroughput);
+            this.titleMap.put(sampler, (int)samplerThroughput);
             for(float f: QUANTILES) {
-                samplerPercentile.put(f * 100, binarySearchMinIndex(samplerShiftArray, f));
+                samplerPercentile.put(String.valueOf(f * 100), (int)binarySearchMinIndex(samplerShiftArray, f));
             }
             result.put(sampler, samplerPercentile);
         }
@@ -174,41 +176,37 @@ public class ScheduledArgentumRunnable implements Runnable {
         return result;
     }
 
-    public JSONObject calculateCumulativeSamplerPercentile() {
-        JSONObject result = new JSONObject();
+    public HashMap<String, HashMap<String, Integer>> calculateCumulativeSamplerPercentile() {
+        HashMap<String, HashMap<String, Integer>> result = new HashMap<String, HashMap<String, Integer>>(samplerPercentileDistMap.size());
         for(String sampler : samplerPercentileDistMap.keySet()) {
-            JSONObject samplerCumulativePercentile = new JSONObject();
+            HashMap<String, Integer> samplerCumulativePercentile = new HashMap<String, Integer>(QUANTILES.length);
             for(float f: QUANTILES) {
-                samplerCumulativePercentile.put(f * 100, binarySearchMinIndex(this.samplerCumulativeShiftArrayMap.get(sampler), f));
+                samplerCumulativePercentile.put(String.valueOf(f * 100), (int)binarySearchMinIndex(this.samplerCumulativeShiftArrayMap.get(sampler), f));
             }
             result.put(sampler, samplerCumulativePercentile);
         }
         return result;
     }
 
-    private ArrayList<JSONObject> calculateSecondTotalIntervalDistribution() {
+    private int[] calculateSecondTotalIntervalDistribution() {
         long sum;
         int prev = 0;
-        ArrayList<JSONObject> distList = new ArrayList<JSONObject>(TIME_PERIODS.length);
+        int[] distList = new int[TIME_PERIODS.length];
         for(int i=0; i<TIME_PERIODS.length;++i) {
             sum = 0;
             for(int j=prev; j< TIME_PERIODS[i] && j < this.percentileDistArray.length();++j) {
                 sum += this.percentileDistArray.get(j); //SSE ?
             }
-            JSONObject interval = new JSONObject();
-            interval.put("from", prev);
-            interval.put("to", TIME_PERIODS[i]);
-            interval.put("count", sum);
+            distList[i] = (int)sum;
             prev = TIME_PERIODS[i];
-            distList.add(interval);
         }
         return distList;
     }
 
-    private JSONObject calculateSamplerSecondTotalIntervalDistribution() {
-        JSONObject result = new JSONObject();
+    private HashMap<String, int[]> calculateSamplerSecondTotalIntervalDistribution() {
+        HashMap<String, int[]> result = new HashMap<String, int[]>(samplerPercentileDistMap.size());
         for(String sampler : samplerPercentileDistMap.keySet()) {
-            ArrayList<JSONObject> distList = new ArrayList<JSONObject>(TIME_PERIODS.length);
+            int[] distList = new int[TIME_PERIODS.length];
             long sum;
             int prev = 0;
             for(int i=0; i<TIME_PERIODS.length;++i) {
@@ -216,15 +214,61 @@ public class ScheduledArgentumRunnable implements Runnable {
                 for(int j=prev; j < TIME_PERIODS[i] && j < this.samplerPercentileDistMap.get(sampler).length();j++) {
                     sum += this.samplerPercentileDistMap.get(sampler).get(j);
                 }
-                JSONObject interval = new JSONObject();
-                interval.put("from", prev);
-                interval.put("to", TIME_PERIODS[i]);
-                interval.put("count", sum);
+                distList[i] = (int)sum;
                 prev = TIME_PERIODS[i];
-                distList.add(interval);
             }
             result.put(sampler, distList);
         }
+        return result;
+    }
+
+    private HashMap<String, Integer> calculateSamplerAvgRT() {
+        HashMap<String, Integer> result = new HashMap<String, Integer>(titleMap.size());
+        for(String sample : sumRTSamplerMap.keySet()) {
+            result.put(sample, (int)(sumRTSamplerMap.get(sample).get() / titleMap.get(sample)));
+        }
+        return result;
+    }
+
+    protected AgSecond aggregate() {
+        AgSecond result = new AgSecond();
+
+        result.time = System.currentTimeMillis() / 1000;
+        result.second = this.second;
+
+        result.avg_lt = (int)(sumLT / throughput);
+        result.active_threads = active_threads;
+
+        result.responseCodes = new HashMap<String, Integer>(this.responseCodeMap.size());
+        for(String key : this.responseCodeMap.keySet()) {
+            result.responseCodes.put(key, this.responseCodeMap.get(key).get());
+        }
+
+        result.samplers = new HashMap<String, Integer>(this.titleMap.size());
+        for(String key : this.titleMap.keySet()) {
+            result.samplers.put(key, this.titleMap.get(key));
+        }
+
+        result.inbound = this.inbound;
+        result.outbound = this.outbound;
+        result.avg_request_size = this.outbound / throughput;
+        result.avg_response_size = this.inbound / throughput;
+
+        result.percentile = calculateSecondTotalPercentile();
+        result.sampler_percentile = calculateSecondSamplerPercentile();
+
+        result.cumulative_percentile = calculateCumulativeTotalPercentile();
+        result.cumulative_sampler_percentile = calculateCumulativeSamplerPercentile();
+
+        result.time_periods = TIME_PERIODS;
+
+        result.interval_dist = calculateSecondTotalIntervalDistribution();
+        result.sampler_interval_dist = calculateSamplerSecondTotalIntervalDistribution();
+
+        result.throughput = this.throughput;
+        result.sampler_avg_rt = calculateSamplerAvgRT();
+        result.avg_rt = sumRT / throughput;
+
         return result;
     }
 
@@ -234,44 +278,69 @@ public class ScheduledArgentumRunnable implements Runnable {
             return; //Data not prepared
         }
 
+        AgSecond agSecond = aggregate();
+
         try {
             JSONObject jsonSecond = new JSONObject();
 
-            jsonSecond.put("time", System.currentTimeMillis()/1000);
-            jsonSecond.put("second", second);
+            jsonSecond.put("time", agSecond.time);
+            jsonSecond.put("second", agSecond.second);
 
-            jsonSecond.put("avg_lt", (sumLT / throughput));
-            jsonSecond.put("active_threads", active_threads);
+            jsonSecond.put("avg_lt", agSecond.avg_lt);
+            jsonSecond.put("active_threads", agSecond.active_threads);
 
-            jsonSecond.put("rc", responseCodeMap);
-            jsonSecond.put("samplers", titleMap);
+            jsonSecond.put("rc", agSecond.responseCodes);
+            jsonSecond.put("samplers", agSecond.samplers);
 
             JSONObject jsonTraffic = new JSONObject();
-            jsonTraffic.put("inbound", inbound);
-            jsonTraffic.put("outbound", outbound);
-            jsonTraffic.put("avg_response_size", inbound / throughput);
-            jsonTraffic.put("avg_request_size", outbound / throughput);
+            jsonTraffic.put("inbound", agSecond.inbound);
+            jsonTraffic.put("outbound", agSecond.outbound);
+            jsonTraffic.put("avg_response_size", agSecond.avg_response_size);
+            jsonTraffic.put("avg_request_size", agSecond.avg_request_size);
 
             jsonSecond.put("traffic", jsonTraffic);
 
             if(QUANTILES != null) {
-                jsonSecond.put("percentile", calculateSecondTotalPercentile());
-                jsonSecond.put("sampler_percentile", calculateSecondSamplerPercentile());
-                jsonSecond.put("cumulative_percentile", calculateCumulativeTotalPercentile());
-                jsonSecond.put("cumulative_sampler_percentile", calculateCumulativeSamplerPercentile());
+                jsonSecond.put("percentile", agSecond.percentile);
+                jsonSecond.put("sampler_percentile", agSecond.sampler_percentile);
+                jsonSecond.put("cumulative_percentile", agSecond.cumulative_percentile);
+                jsonSecond.put("cumulative_sampler_percentile", agSecond.cumulative_sampler_percentile);
             }
             if(TIME_PERIODS != null) {
-                jsonSecond.put("interval_dist", calculateSecondTotalIntervalDistribution());
-                jsonSecond.put("sampler_interval_dist", calculateSamplerSecondTotalIntervalDistribution());
-            }
+                ArrayList<JSONObject> distList = new ArrayList<JSONObject>(agSecond.time_periods.length);
+                int prev = 0;
+                for(int i = 0 ;i<agSecond.time_periods.length;++i) {
+                    JSONObject jsonInterval = new JSONObject();
+                    jsonInterval.put("from", prev);
+                    jsonInterval.put("to", agSecond.time_periods[i]);
+                    jsonInterval.put("count", agSecond.interval_dist[i]);
+                    prev = agSecond.time_periods[i];
+                    distList.add(jsonInterval);
+                }
+                jsonSecond.put("interval_dist", distList);
 
-            LinkedHashMap<String, Long> samplerAvgRTMap = new LinkedHashMap<String, Long>();
-            for(String sample : sumRTSamplerMap.keySet()) {
-                samplerAvgRTMap.put(sample, sumRTSamplerMap.get(sample).get() / titleMap.get(sample));
+                JSONObject jsonSamplerIntervalDistribution = new JSONObject();
+                for(String sampler : agSecond.sampler_interval_dist.keySet()) {
+                    distList = new ArrayList<JSONObject>(agSecond.time_periods.length);
+                    prev = 0;
+                    int[] sampler_interval_dist = agSecond.sampler_interval_dist.get(sampler);
+                    for(int i = 0 ;i<agSecond.time_periods.length;++i) {
+                        JSONObject jsonInterval = new JSONObject();
+                        jsonInterval.put("from", prev);
+                        jsonInterval.put("to", agSecond.time_periods[i]);
+                        jsonInterval.put("count", sampler_interval_dist[i]);
+                        prev = agSecond.time_periods[i];
+                        distList.add(jsonInterval);
+                    }
+                    jsonSamplerIntervalDistribution.put(sampler, distList);
+                }
+                jsonSecond.put("sampler_interval_dist", jsonSamplerIntervalDistribution);
+
+
             }
-            jsonSecond.put("th", throughput);
-            jsonSecond.put("sampler_avg_rt", samplerAvgRTMap);
-            jsonSecond.put("avg_rt", (sumRT / throughput));
+            jsonSecond.put("th", agSecond.throughput);
+            jsonSecond.put("sampler_avg_rt", agSecond.sampler_avg_rt);
+            jsonSecond.put("avg_rt", agSecond.avg_rt);
 
             writer.write((jsonSecond.toJSONString() + "\n" ).toCharArray());
             writer.flush();
