@@ -167,7 +167,7 @@ public class ArgentumListener extends AbstractListenerElement
             return;
         }
         if(now > second + timeout_value || rt > timeout_value * 1000) {
-            log.error("aggregation timeout" + timeout_value + ", sampleEnd: " + second);
+            log.error("aggregation timeout, sampleEnd: " + second);
             return;
         }
 
