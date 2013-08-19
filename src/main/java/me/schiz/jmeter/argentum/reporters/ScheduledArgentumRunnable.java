@@ -8,6 +8,7 @@ import java.io.Writer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -178,7 +179,10 @@ public class ScheduledArgentumRunnable implements Runnable {
 
     public HashMap<String, HashMap<String, Integer>> calculateCumulativeSamplerPercentile() {
         HashMap<String, HashMap<String, Integer>> result = new HashMap<String, HashMap<String, Integer>>(samplerPercentileDistMap.size());
-        for(String sampler : samplerPercentileDistMap.keySet()) {
+        HashSet<String> samplers = new HashSet<String>();
+        samplers.addAll(samplerPercentileDistMap.keySet());
+        samplers.addAll(this.samplerCumulativeShiftArrayMap.keySet());
+        for(String sampler : samplers) {
             HashMap<String, Integer> samplerCumulativePercentile = new HashMap<String, Integer>(QUANTILES.length);
             for(float f: QUANTILES) {
                 samplerCumulativePercentile.put(String.valueOf(f * 100), (int)binarySearchMinIndex(this.samplerCumulativeShiftArrayMap.get(sampler), f));
@@ -244,11 +248,6 @@ public class ScheduledArgentumRunnable implements Runnable {
             result.responseCodes.put(key, this.responseCodeMap.get(key).get());
         }
 
-        result.samplers = new HashMap<String, Integer>(this.titleMap.size());
-        for(String key : this.titleMap.keySet()) {
-            result.samplers.put(key, this.titleMap.get(key));
-        }
-
         result.inbound = this.inbound;
         result.outbound = this.outbound;
         result.avg_request_size = this.outbound / throughput;
@@ -264,6 +263,11 @@ public class ScheduledArgentumRunnable implements Runnable {
 
         result.interval_dist = calculateSecondTotalIntervalDistribution();
         result.sampler_interval_dist = calculateSamplerSecondTotalIntervalDistribution();
+
+        result.samplers = new HashMap<String, Integer>(this.titleMap.size());
+        for(String key : this.titleMap.keySet()) {
+            result.samplers.put(key, this.titleMap.get(key));
+        }
 
         result.throughput = this.throughput;
         result.sampler_avg_rt = calculateSamplerAvgRT();

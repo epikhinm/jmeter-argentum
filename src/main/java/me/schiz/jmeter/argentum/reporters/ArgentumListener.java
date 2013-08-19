@@ -48,6 +48,7 @@ public class ArgentumListener extends AbstractListenerElement
     public ConcurrentHashMap<String, long[]>    samplerCumulativePercentileShiftArray;
 
     public ConcurrentHashMap<String, AtomicLong> samplerTotalCounterMap;
+    private boolean started = false;
 
     static String RC_OK = "200";
     static String RC_ERROR = "500";
@@ -152,7 +153,7 @@ public class ArgentumListener extends AbstractListenerElement
 
     @Override
     public void sampleOccurred(SampleEvent sampleEvent) {
-        //if(!started) return;
+        if(!started) return;
         long now = System.currentTimeMillis() / 1000;
         SampleResult sr = sampleEvent.getResult();
 
@@ -167,7 +168,8 @@ public class ArgentumListener extends AbstractListenerElement
             return;
         }
         if(now > second + timeout_value || rt > timeout_value * 1000) {
-            log.error("aggregation timeout, sampleEnd: " + second);
+            log.error("aggregation timeout, sampleEnd: " + second + ", now: " +now+" rt: " + rt + "ms, timeout: " + timeout_value * 1000);
+            //log.error
             return;
         }
 
@@ -211,51 +213,52 @@ public class ArgentumListener extends AbstractListenerElement
 
         try {
             writer = new BufferedWriter(new FileWriter(getOutputFileName()));
-        } catch (IOException e) {
-            log.warn("Can't create output file " + getOutputFileName(), e);
-            return;
-        }
 
-        timeout_value = getTimeout();
-        secSet = new ConcurrentSkipListSet<Long>();
-        threadsMap = new ConcurrentHashMap<Long, Integer>(timeout_value + floatingSeconds);
-        sumLTMap = new ConcurrentHashMap<Long, AtomicLong>(timeout_value + floatingSeconds);
-        responseCodeMap = new ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicInteger>>(timeout_value + floatingSeconds);
-        sumInboundTraffic = new ConcurrentHashMap<Long, AtomicLong>(timeout_value + floatingSeconds);
-        sumOutboundTraffic = new ConcurrentHashMap<Long, AtomicLong>(timeout_value + floatingSeconds);
-        samplerTotalCounterMap = new ConcurrentHashMap<String, AtomicLong>();
+            timeout_value = getTimeout();
+            secSet = new ConcurrentSkipListSet<Long>();
+            threadsMap = new ConcurrentHashMap<Long, Integer>(timeout_value + floatingSeconds);
+            sumLTMap = new ConcurrentHashMap<Long, AtomicLong>(timeout_value + floatingSeconds);
+            responseCodeMap = new ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicInteger>>(timeout_value + floatingSeconds);
+            sumInboundTraffic = new ConcurrentHashMap<Long, AtomicLong>(timeout_value + floatingSeconds);
+            sumOutboundTraffic = new ConcurrentHashMap<Long, AtomicLong>(timeout_value + floatingSeconds);
+            samplerTotalCounterMap = new ConcurrentHashMap<String, AtomicLong>();
 
-        if(getPercentiles() != null) {
-            ScheduledArgentumRunnable.QUANTILES = getPercentiles();
-            //For cumulative percentiles
-            percentileDistMap = new ConcurrentHashMap<Long, AtomicLongArray>(timeout_value + floatingSeconds);
-            percentileDistShiftArray = new long[timeout_value*1000 + 1];
-            samplerPercentileDistMap = new ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicLongArray>>(timeout_value + floatingSeconds);
-            samplerCumulativePercentileShiftArray = new ConcurrentHashMap<String, long[]>();
+            if(getPercentiles() != null) {
+                ScheduledArgentumRunnable.QUANTILES = getPercentiles();
+                //For cumulative percentiles
+                percentileDistMap = new ConcurrentHashMap<Long, AtomicLongArray>(timeout_value + floatingSeconds);
+                percentileDistShiftArray = new long[timeout_value*1000 + 1];
+                samplerPercentileDistMap = new ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicLongArray>>(timeout_value + floatingSeconds);
+                samplerCumulativePercentileShiftArray = new ConcurrentHashMap<String, long[]>();
 
-        }
-        if(getTimePeriods() != null) {
-            ScheduledArgentumRunnable.TIME_PERIODS = getTimePeriods();
+            }
+            if(getTimePeriods() != null) {
+                ScheduledArgentumRunnable.TIME_PERIODS = getTimePeriods();
 
-            if(ScheduledArgentumRunnable.TIME_PERIODS[ScheduledArgentumRunnable.TIME_PERIODS.length - 1] < timeout_value) {
-                int new_time_periods[] = new int[ScheduledArgentumRunnable.TIME_PERIODS.length + 1];
-                //Hmmm. Sorry for that
+                if(ScheduledArgentumRunnable.TIME_PERIODS[ScheduledArgentumRunnable.TIME_PERIODS.length - 1] < timeout_value) {
+                    int new_time_periods[] = new int[ScheduledArgentumRunnable.TIME_PERIODS.length + 1];
+                    //Hmmm. Sorry for that
 //                for(int i = 0; i < ScheduledArgentumRunnable.TIME_PERIODS.length ;++i) {
 //                    new_time_periods[i] = ScheduledArgentumRunnable.TIME_PERIODS[i];
 //                }
-                System.arraycopy(ScheduledArgentumRunnable.TIME_PERIODS, 0, new_time_periods, 0, ScheduledArgentumRunnable.TIME_PERIODS.length);
-                new_time_periods[ScheduledArgentumRunnable.TIME_PERIODS.length] = timeout_value;
-                ScheduledArgentumRunnable.TIME_PERIODS = new_time_periods;
+                    System.arraycopy(ScheduledArgentumRunnable.TIME_PERIODS, 0, new_time_periods, 0, ScheduledArgentumRunnable.TIME_PERIODS.length);
+                    new_time_periods[ScheduledArgentumRunnable.TIME_PERIODS.length] = timeout_value;
+                    ScheduledArgentumRunnable.TIME_PERIODS = new_time_periods;
+                }
             }
-        }
 
-        if(executors == null) {
-            synchronized (this.getClass()) {
-                if(executors == null)   executors = Executors.newScheduledThreadPool(1);
-                executors.scheduleAtFixedRate(new ScheduledArgentumRunnable(this, writer), (timeout_value - 1) * 1000, 1000, TimeUnit.MILLISECONDS);
+            if(executors == null) {
+                synchronized (this.getClass()) {
+                    if(executors == null)   executors = Executors.newScheduledThreadPool(1);
+                    executors.scheduleAtFixedRate(new ScheduledArgentumRunnable(this, writer), (timeout_value - 1) * 1000, 1000, TimeUnit.MILLISECONDS);
+                }
             }
+            started = true;
+        } catch (IOException e) {
+            log.warn("Can't create output file " + getOutputFileName(), e);
+            started = false;
+            return;
         }
-        //started = true;
     }
 
     @Override
@@ -265,6 +268,7 @@ public class ArgentumListener extends AbstractListenerElement
 
     @Override
     public void testEnded() {
+        started = false;
         while(secSet.size() > 0) {
             //last second may be dropped
         }
