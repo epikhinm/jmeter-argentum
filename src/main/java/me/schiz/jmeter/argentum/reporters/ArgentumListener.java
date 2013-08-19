@@ -250,9 +250,11 @@ public class ArgentumListener extends AbstractListenerElement
             if(executors == null) {
                 synchronized (this.getClass()) {
                     if(executors == null)   executors = Executors.newScheduledThreadPool(1);
-                    executors.scheduleAtFixedRate(new ScheduledArgentumRunnable(this, writer), (timeout_value - 1) * 1000, 1000, TimeUnit.MILLISECONDS);
+                    executors.scheduleAtFixedRate(new ScheduledArgentumRunnable(this, writer), 0, 500, TimeUnit.MILLISECONDS);
                 }
             }
+
+            log.info("You are using argentum. Be careful.");
             started = true;
         } catch (IOException e) {
             log.warn("Can't create output file " + getOutputFileName(), e);

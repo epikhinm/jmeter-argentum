@@ -53,11 +53,13 @@ public class ScheduledArgentumRunnable implements Runnable {
     }
 
     public boolean check() {
-        if(this.listener.secSet.first() + this.listener.getTimeout() + append_agg_timeout > (System.currentTimeMillis() / 1000)) {
-            log.debug("failure check, first " + this.listener.secSet.first() + " + timeout " + this.listener.getTimeout() + "> " + (System.currentTimeMillis() / 1000));
+        if(this.listener.secSet.isEmpty())  return false;
+        long now = System.currentTimeMillis() / 1000;
+        if(this.listener.secSet.first() + this.listener.getTimeout() + append_agg_timeout > now) {
+            log.debug("failure check, first " + this.listener.secSet.first() + " + timeout " + this.listener.getTimeout() + "> " + now);
             return false;
         } else {
-            log.debug("time: " + (System.currentTimeMillis() / 1000) + " queue: " + this.listener.secSet.toString());
+            log.debug("time: " + now + " queue: " + this.listener.secSet.toString());
 
             this.second = this.listener.secSet.pollFirst();
             this.active_threads = this.listener.threadsMap.get(this.second);
@@ -278,13 +280,13 @@ public class ScheduledArgentumRunnable implements Runnable {
 
     @Override
     public void run() {
-        if(check() == false) {
-            return; //Data not prepared
-        }
-
-        AgSecond agSecond = aggregate();
-
         try {
+            if(check() == false) {
+                return; //Data not prepared
+            }
+
+            AgSecond agSecond = aggregate();
+
             JSONObject jsonSecond = new JSONObject();
 
             jsonSecond.put("time", agSecond.time);
