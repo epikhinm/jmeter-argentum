@@ -1,17 +1,18 @@
 package me.schiz.jmeter.argentum.reporters;
 
-import org.apache.jmeter.engine.event.LoopIterationEvent;
 import org.apache.jmeter.engine.util.NoThreadClone;
 import org.apache.jmeter.reporters.AbstractListenerElement;
 import org.apache.jmeter.samplers.SampleEvent;
 import org.apache.jmeter.samplers.SampleListener;
 import org.apache.jmeter.samplers.SampleResult;
-import org.apache.jmeter.testelement.TestListener;
+import org.apache.jmeter.testelement.TestStateListener;
 import org.apache.jmeter.threads.JMeterContextService;
 import org.apache.jorphan.logging.LoggingManager;
 import org.apache.log.Logger;
 
-import java.io.*;
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.util.LinkedList;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -19,7 +20,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongArray;
 
 public class ArgentumListener extends AbstractListenerElement
-        implements SampleListener, NoThreadClone, TestListener {
+        implements SampleListener, NoThreadClone, TestStateListener {
 
     private static final Logger log  = LoggingManager.getLoggerForClass();
 
@@ -29,6 +30,7 @@ public class ArgentumListener extends AbstractListenerElement
     public static String timeout = "ArgentumListener.timeout";
     public static String percentiles = "ArgentumListener.percentiles";
     public static String timePeriods = "ArgentumListener.timePeriods";
+    public static String rebuildCumulative = "ArgentumListener.rebuildCumulative";
 
     //private volatile boolean started = false;
     protected BufferedWriter writer;
@@ -87,7 +89,7 @@ public class ArgentumListener extends AbstractListenerElement
         int[] time_periods = new int[times.length];
         int j = 0;
         try{
-            for(String time: times ) {
+            for(String time: times) {
                 time_periods[j++] = Integer.parseInt(time);
             }
         } catch (NumberFormatException nfe) {
@@ -101,6 +103,13 @@ public class ArgentumListener extends AbstractListenerElement
     }
     public int getTimeout() {
         return getPropertyAsInt(timeout);
+    }
+
+    public void setRebuildCumulative(boolean flag) {
+        setProperty(rebuildCumulative, flag);
+    }
+    public boolean isRebuildCumulative() {
+        return getPropertyAsBoolean(rebuildCumulative);
     }
 
     private boolean createSecond(Long second) {
@@ -169,7 +178,6 @@ public class ArgentumListener extends AbstractListenerElement
         }
         if(now > second + timeout_value || rt > timeout_value * 1000) {
             log.error("aggregation timeout, sampleEnd: " + second + ", now: " +now+" rt: " + rt + "ms, timeout: " + timeout_value * 1000);
-            //log.error
             return;
         }
 
@@ -211,8 +219,7 @@ public class ArgentumListener extends AbstractListenerElement
             argentumListeners.add(this);
         }
 
-        try {
-            writer = new BufferedWriter(new FileWriter(getOutputFileName()));
+        try {            writer = new BufferedWriter(new FileWriter(getOutputFileName()));
 
             timeout_value = getTimeout();
             secSet = new ConcurrentSkipListSet<Long>();
@@ -250,7 +257,7 @@ public class ArgentumListener extends AbstractListenerElement
             if(executors == null) {
                 synchronized (this.getClass()) {
                     if(executors == null)   executors = Executors.newScheduledThreadPool(1);
-                    executors.scheduleAtFixedRate(new ScheduledArgentumRunnable(this, writer), 0, 500, TimeUnit.MILLISECONDS);
+                    executors.scheduleAtFixedRate(new ScheduledArgentumRunnable(this, writer, isRebuildCumulative()), 0, 500, TimeUnit.MILLISECONDS);
                 }
             }
 
@@ -290,10 +297,6 @@ public class ArgentumListener extends AbstractListenerElement
     @Override
     public void testEnded(String s) {
         testEnded();
-    }
-
-    @Override
-    public void testIterationStart(LoopIterationEvent loopIterationEvent) {
     }
 
     private String convertResponseCode(SampleResult sr) {

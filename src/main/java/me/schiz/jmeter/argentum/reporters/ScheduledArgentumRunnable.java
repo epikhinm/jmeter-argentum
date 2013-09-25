@@ -8,7 +8,6 @@ import java.io.Writer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -33,6 +32,10 @@ public class ScheduledArgentumRunnable implements Runnable {
     protected AtomicLongArray percentileDistArray;
     protected long[] percentileShiftArray;
 
+    //for per thread-configuration cumulative rt-distributions
+    protected boolean rebuild_cumulative;
+    private static int last_active_threads = 0;
+
     protected ConcurrentHashMap<String, AtomicLongArray> samplerPercentileDistMap;
     protected ConcurrentHashMap<String, long[]> samplerCumulativeShiftArrayMap;
     protected ConcurrentHashMap<String, AtomicLong> samplerTotalCounterMap;
@@ -46,10 +49,11 @@ public class ScheduledArgentumRunnable implements Runnable {
     static float[] DEFAULT_QUANTILES = {0.25f, 0.5f, 0.75f, 0.8f, 0.9f, 0.95f, 0.98f, 0.99f, 1.0f};
     static int[] DEFAULT_TIME_PERIODS = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 150, 200, 250, 300, 350, 400, 450, 500, 600, 650, 700, 750, 800, 850, 900, 950, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000, 6500, 7000, 7500, 8000, 8500, 9000, 9500, 10000, 11000};
 
-    public ScheduledArgentumRunnable(ArgentumListener listener, Writer writer) {
+    public ScheduledArgentumRunnable(ArgentumListener listener, Writer writer, boolean rebuildCumulative) {
         this.listener = listener;
         this.writer = writer;
         this.timeout = this.listener.getTimeout();
+        this.rebuild_cumulative = rebuildCumulative;
     }
 
     public boolean check() {
@@ -181,10 +185,7 @@ public class ScheduledArgentumRunnable implements Runnable {
 
     public HashMap<String, HashMap<String, Integer>> calculateCumulativeSamplerPercentile() {
         HashMap<String, HashMap<String, Integer>> result = new HashMap<String, HashMap<String, Integer>>(samplerPercentileDistMap.size());
-        HashSet<String> samplers = new HashSet<String>();
-        samplers.addAll(samplerPercentileDistMap.keySet());
-        samplers.addAll(this.samplerCumulativeShiftArrayMap.keySet());
-        for(String sampler : samplers) {
+        for(String sampler : this.samplerCumulativeShiftArrayMap.keySet()) {
             HashMap<String, Integer> samplerCumulativePercentile = new HashMap<String, Integer>(QUANTILES.length);
             for(float f: QUANTILES) {
                 samplerCumulativePercentile.put(String.valueOf(f * 100), (int)binarySearchMinIndex(this.samplerCumulativeShiftArrayMap.get(sampler), f));
@@ -245,6 +246,18 @@ public class ScheduledArgentumRunnable implements Runnable {
         result.avg_lt = (int)(sumLT / throughput);
         result.active_threads = active_threads;
 
+        if(rebuild_cumulative) {
+            if(last_active_threads == 0) last_active_threads = result.active_threads;
+            if(last_active_threads != result.active_threads) {
+                last_active_threads = result.active_threads;
+                //clear cumulative data!
+                Arrays.fill(this.percentileShiftArray, 0L);
+                for(String sampler : this.samplerCumulativeShiftArrayMap.keySet()) {
+                    Arrays.fill(this.samplerCumulativeShiftArrayMap.get(sampler), 0L);
+                }
+                log.warn("all cumulative data cleared!");
+            }
+        }
         result.responseCodes = new HashMap<String, Integer>(this.responseCodeMap.size());
         for(String key : this.responseCodeMap.keySet()) {
             result.responseCodes.put(key, this.responseCodeMap.get(key).get());
