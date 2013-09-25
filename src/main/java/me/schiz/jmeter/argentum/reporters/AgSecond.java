@@ -25,6 +25,8 @@ public class AgSecond {
     public HashMap<String, HashMap<String, Integer>> sampler_percentile;
     public HashMap<String, Integer> cumulative_percentile;
     public HashMap<String, HashMap<String, Integer>> cumulative_sampler_percentile;
+    public HashMap<String, Integer> total_sampler_avg_rt;
+    public HashMap<String, Integer> total_sampler_std_dev_rt;
 
     //interval distribution
     public int[] time_periods;
