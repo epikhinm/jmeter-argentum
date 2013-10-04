@@ -18,6 +18,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongArray;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class ArgentumListener extends AbstractListenerElement
         implements SampleListener, NoThreadClone, TestStateListener {
@@ -49,7 +50,9 @@ public class ArgentumListener extends AbstractListenerElement
     public ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicLongArray>>   samplerPercentileDistMap;
     public ConcurrentHashMap<String, long[]>    samplerCumulativePercentileShiftArray;
 
-    public ConcurrentHashMap<String, AtomicLong> samplerTotalCounterMap;
+    public ConcurrentHashMap<Long, ReentrantReadWriteLock> rwLockMap;
+
+//    public ConcurrentHashMap<String, AtomicLong> samplerTotalCounterMap;
     private boolean started = false;
 
     static String RC_OK = "200";
@@ -125,6 +128,7 @@ public class ArgentumListener extends AbstractListenerElement
             samplerPercentileDistMap.put(second, new ConcurrentHashMap<String, AtomicLongArray>());
             sumInboundTraffic.put(second, new AtomicLong(0));
             sumOutboundTraffic.put(second, new AtomicLong(0));
+            rwLockMap.put(second, new ReentrantReadWriteLock());
 
             secSet.add(second);
         }
@@ -135,8 +139,7 @@ public class ArgentumListener extends AbstractListenerElement
         ConcurrentHashMap<String, AtomicInteger> cursor = responseCodeMap.get(second);
         if(cursor.get(rc) == null) {
             synchronized (responseCodeMap) {
-                if(cursor.get(rc) == null)  cursor.put(rc, new AtomicInteger(1));
-                //else cursor.get(rc).getAndIncrement();
+                if(cursor.get(rc) == null)  cursor.put(rc, new AtomicInteger(0));
             }
         }
         cursor.get(rc).incrementAndGet();
@@ -187,12 +190,26 @@ public class ArgentumListener extends AbstractListenerElement
                 return;
             }
         }
-        percentileDistMap.get(second).incrementAndGet(rt);
-        addToSamplerDistMap(second, samplerName, rt);
-        addRCtoMap(second, convertResponseCode(sr));
-        sumLTMap.get(second).getAndAdd(sr.getLatency());
-        sumInboundTraffic.get(second).getAndAdd(sr.getBodySize());
-        sumOutboundTraffic.get(second).getAndAdd(sr.getHeadersSize());
+        try{
+            ReentrantReadWriteLock.ReadLock writeLock = rwLockMap.get(second).readLock();
+            writeLock.lock();
+            if(!secSet.contains(second)) {
+                if(!createSecond(second)) {
+                    log.error("aggregation timeout, sampleEnd: " + second + " not in [" + this.secSet.first() + ";" + this.secSet.last()+ "]");
+                    writeLock.unlock();
+                    return;
+                }
+            }
+            percentileDistMap.get(second).incrementAndGet(rt);
+            addToSamplerDistMap(second, samplerName, rt);
+            addRCtoMap(second, convertResponseCode(sr));
+            sumLTMap.get(second).getAndAdd(sr.getLatency());
+            sumInboundTraffic.get(second).getAndAdd(sr.getBodySize());
+            sumOutboundTraffic.get(second).getAndAdd(sr.getHeadersSize());
+            writeLock.unlock();
+        } catch (NullPointerException npe) {
+            log.error("aggregation timeout ", npe);
+        }
     }
 
     @Override
@@ -228,7 +245,8 @@ public class ArgentumListener extends AbstractListenerElement
             responseCodeMap = new ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicInteger>>(timeout_value + floatingSeconds);
             sumInboundTraffic = new ConcurrentHashMap<Long, AtomicLong>(timeout_value + floatingSeconds);
             sumOutboundTraffic = new ConcurrentHashMap<Long, AtomicLong>(timeout_value + floatingSeconds);
-            samplerTotalCounterMap = new ConcurrentHashMap<String, AtomicLong>();
+  //          samplerTotalCounterMap = new ConcurrentHashMap<String, AtomicLong>();
+            rwLockMap = new ConcurrentHashMap<Long, ReentrantReadWriteLock>(timeout_value + floatingSeconds);
 
             if(getPercentiles() != null) {
                 ScheduledArgentumRunnable.QUANTILES = getPercentiles();

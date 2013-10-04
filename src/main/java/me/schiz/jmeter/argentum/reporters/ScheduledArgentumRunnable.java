@@ -13,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongArray;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class ScheduledArgentumRunnable implements Runnable {
 
@@ -41,6 +42,7 @@ public class ScheduledArgentumRunnable implements Runnable {
     protected ConcurrentHashMap<String, long[]> samplerCumulativeShiftArrayMap;
     protected ConcurrentHashMap<String, AtomicLong> samplerTotalCounterMap;
     protected HashMap<String, Integer> totalSamplerAvgRTMap;
+    protected ReentrantReadWriteLock.WriteLock readLock;
 
     protected int timeout;
 
@@ -81,8 +83,9 @@ public class ScheduledArgentumRunnable implements Runnable {
             this.percentileShiftArray = this.listener.percentileDistShiftArray;
             this.samplerPercentileDistMap = this.listener.samplerPercentileDistMap.get(this.second);
             this.samplerCumulativeShiftArrayMap = this.listener.samplerCumulativePercentileShiftArray;
-            this.samplerTotalCounterMap = this.listener.samplerTotalCounterMap;
+//            this.samplerTotalCounterMap = this.listener.samplerTotalCounterMap;
             this.totalSamplerAvgRTMap = new HashMap<String, Integer>();
+            this.readLock = this.listener.rwLockMap.get(second).writeLock();
 
             return true;
         }
@@ -96,7 +99,8 @@ public class ScheduledArgentumRunnable implements Runnable {
         this.listener.sumOutboundTraffic.remove(this.second);
         this.listener.percentileDistMap.remove(this.second);
         this.listener.samplerPercentileDistMap.remove(this.second);
-        this.listener.samplerTotalCounterMap.remove(this.second);
+        //this.listener.samplerTotalCounterMap.remove(this.second);
+        this.listener.rwLockMap.remove(this.second);
         samplerPercentileDistMap = null;
     }
 
@@ -143,16 +147,15 @@ public class ScheduledArgentumRunnable implements Runnable {
 
             AtomicLongArray samplerDistribution = samplerPercentileDistMap.get(sampler);
             long[] cumulativeShiftArray = samplerCumulativeShiftArrayMap.get(sampler);
-            AtomicLong samplerCounter = samplerTotalCounterMap.get(sampler);
+            //AtomicLong samplerCounter = samplerTotalCounterMap.get(sampler);
+            //AtomicLong samplerCounter = new AtomicLong(0);
+            //titleMap.
+            //samplerTotalCounterMap.put(sampler, samplerCounter);
 
             if(cumulativeShiftArray == null) {
                 cumulativeShiftArray = new long[timeout*1000 + 1];
                 Arrays.fill(cumulativeShiftArray, 0);
                 samplerCumulativeShiftArrayMap.put(sampler, cumulativeShiftArray);
-            }
-            if(samplerCounter == null) {
-                samplerCounter = new AtomicLong(0);
-                samplerTotalCounterMap.put(sampler, samplerCounter);
             }
 
             long samplerThroughput = 0;
@@ -174,10 +177,9 @@ public class ScheduledArgentumRunnable implements Runnable {
                     }
                     // sum += cur_rt * (cur_count - last_count)
                     sum = sum.add(BigInteger.valueOf(i * (cumulativeShiftArray[i] - last_shift_rt)));
-                    log.warn("cur: " + cumulativeShiftArray[i] + " last: " + last_shift_rt);
                     last_shift_rt = cumulativeShiftArray[i];
                     samplerThroughput += i_rCount;
-                    samplerCounter.getAndAdd(i_rCount);
+              //      samplerCounter.getAndAdd(i_rCount);
                     sumRTSamplerMap.get(sampler) .addAndGet(i_rCount * i);
                 }
             }
@@ -267,6 +269,7 @@ public class ScheduledArgentumRunnable implements Runnable {
     }
 
     protected AgSecond aggregate() {
+        this.readLock.lock();
         AgSecond result = new AgSecond();
 
         result.time = System.currentTimeMillis() / 1000;
@@ -319,6 +322,7 @@ public class ScheduledArgentumRunnable implements Runnable {
 
         result.total_sampler_avg_rt = totalSamplerAvgRTMap;
         result.total_sampler_std_dev_rt = calculateTotalSamplerStdDevRT();
+        this.readLock.unlock();
 
         return result;
     }
@@ -397,7 +401,7 @@ public class ScheduledArgentumRunnable implements Runnable {
             last.put("sampler_avg_rt", agSecond.sampler_avg_rt);
             last.put("overall_avg_rt", agSecond.avg_rt);
 
-            //jsonSecond.put("last", last);
+            jsonSecond.put("last", last);
             jsonSecond.put("total", total);
 
             writer.write((jsonSecond.toJSONString() + "\n" ).toCharArray());
