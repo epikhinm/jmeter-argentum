@@ -52,7 +52,6 @@ public class ArgentumListener extends AbstractListenerElement
 
     public ConcurrentHashMap<Long, ReentrantReadWriteLock> rwLockMap;
 
-//    public ConcurrentHashMap<String, AtomicLong> samplerTotalCounterMap;
     private boolean started = false;
 
     static String RC_OK = "200";
@@ -245,7 +244,6 @@ public class ArgentumListener extends AbstractListenerElement
             responseCodeMap = new ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicInteger>>(timeout_value + floatingSeconds);
             sumInboundTraffic = new ConcurrentHashMap<Long, AtomicLong>(timeout_value + floatingSeconds);
             sumOutboundTraffic = new ConcurrentHashMap<Long, AtomicLong>(timeout_value + floatingSeconds);
-  //          samplerTotalCounterMap = new ConcurrentHashMap<String, AtomicLong>();
             rwLockMap = new ConcurrentHashMap<Long, ReentrantReadWriteLock>(timeout_value + floatingSeconds);
 
             if(getPercentiles() != null) {
