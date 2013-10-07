@@ -190,6 +190,8 @@ public class ArgentumListener extends AbstractListenerElement
             }
         }
         try{
+            // Inversed read-write lock. We can do concurrency writes, and only single read
+
             ReentrantReadWriteLock.ReadLock writeLock = rwLockMap.get(second).readLock();
             writeLock.lock();
             if(!secSet.contains(second)) {
@@ -273,7 +275,7 @@ public class ArgentumListener extends AbstractListenerElement
             if(executors == null) {
                 synchronized (this.getClass()) {
                     if(executors == null)   executors = Executors.newScheduledThreadPool(1);
-                    executors.scheduleAtFixedRate(new ScheduledArgentumRunnable(this, writer, isRebuildCumulative()), 0, 500, TimeUnit.MILLISECONDS);
+                    executors.scheduleAtFixedRate(new ScheduledArgentumRunnable(this, writer, isRebuildCumulative()), 0, 50, TimeUnit.MILLISECONDS);
                 }
             }
 

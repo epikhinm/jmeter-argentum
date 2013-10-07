@@ -33,6 +33,7 @@ public class ScheduledArgentumRunnable implements Runnable {
     protected Writer writer;
     protected AtomicLongArray percentileDistArray;
     protected long[] percentileShiftArray;
+    protected boolean is_empty;
 
     //for per thread-configuration cumulative rt-distributions
     protected boolean rebuild_cumulative;
@@ -44,8 +45,9 @@ public class ScheduledArgentumRunnable implements Runnable {
     protected ReentrantReadWriteLock.WriteLock readLock;
 
     protected int timeout;
-
-    static int append_agg_timeout = 2; //2s
+    private static int last_threads_count;
+    protected static HashMap<String, Object> last_total_metrics = new HashMap<String, Object>();
+    protected static long last_aggregated_second;
 
     static float[] QUANTILES = null;
     static int[] TIME_PERIODS = null;
@@ -60,17 +62,18 @@ public class ScheduledArgentumRunnable implements Runnable {
     }
 
     public boolean check() {
-        if(this.listener.secSet.isEmpty())  return false;
         long now = System.currentTimeMillis() / 1000;
-        if(this.listener.secSet.first() + this.listener.getTimeout() + append_agg_timeout > now) {
-            log.debug("failure check, first " + this.listener.secSet.first() + " + timeout " + this.listener.getTimeout() + "> " + now);
-            return false;
-        } else {
-            log.debug("time: " + now + " queue: " + this.listener.secSet.toString());
+        long checkSecond = (now  - timeout - 1);
 
-            this.second = this.listener.secSet.pollFirst();
+        if(checkSecond == last_aggregated_second) return false;
+        if(this.listener.secSet.contains(checkSecond)) {
+            log.debug("time: " + checkSecond + " queue: " + this.listener.secSet.toString());
+            this.listener.secSet.remove(Long.valueOf(checkSecond));
+            this.is_empty = false;
+            this.second = checkSecond;//this.listener.secSet.pollFirst();
             this.active_threads = this.listener.threadsMap.get(this.second);
-            this.throughput = 0; //1
+            last_threads_count = this.active_threads;
+            this.throughput = 0;
             this.responseCodeMap = this.listener.responseCodeMap.get(this.second);
             this.titleMap = new HashMap<String, Integer>();
             this.sumRTSamplerMap = new HashMap<String, AtomicLong>();
@@ -85,8 +88,29 @@ public class ScheduledArgentumRunnable implements Runnable {
             this.totalSamplerAvgRTMap = new HashMap<String, Integer>();
             this.readLock = this.listener.rwLockMap.get(second).writeLock();
 
-            return true;
+        } else {
+            if(last_aggregated_second == 0) return false;
+            // empty second
+            log.debug("time: " + now + " is empty");
+            this.is_empty = true;
+            this.second = checkSecond;
+            this.active_threads = last_active_threads;
+            this.throughput = 0;
+            this.responseCodeMap = null;
+            this.titleMap = null;
+            this.sumRTSamplerMap = null;
+            this.sumRT = 0;
+            this.sumLT = 0;
+            this.inbound = 0;
+            this.outbound = 0;
+            this.percentileDistArray = null;
+            this.percentileShiftArray = this.listener.percentileDistShiftArray;
+            this.samplerPercentileDistMap = null;
+            this.samplerCumulativeShiftArrayMap = this.listener.samplerCumulativePercentileShiftArray;
+            this.totalSamplerAvgRTMap = new HashMap<String, Integer>();
+            this.readLock = null;
         }
+        return true;
     }
 
     public void delete() {
@@ -135,10 +159,6 @@ public class ScheduledArgentumRunnable implements Runnable {
 
     private HashMap<String, HashMap<String, Integer>> calculateSecondSamplerPercentile() {
         HashMap<String, HashMap<String, Integer>> result = new HashMap<String, HashMap<String, Integer>>(samplerPercentileDistMap.size());
-
-        long last_shift_rt = 0;
-        BigInteger sum = BigInteger.ZERO;
-
         for(String sampler : samplerPercentileDistMap.keySet()) {
             HashMap<String, Integer> samplerPercentile = new HashMap<String, Integer>(QUANTILES.length);
 
@@ -159,6 +179,8 @@ public class ScheduledArgentumRunnable implements Runnable {
                 sumRTSamplerCounter = new AtomicLong(0);
                 sumRTSamplerMap.put(sampler, sumRTSamplerCounter);
             }
+            BigInteger sum = BigInteger.ZERO;
+            long last_shift_rt = 0;
             for(int i = 0; i < samplerDistribution.length() ; ++i) {
                 i_rCount = samplerDistribution.get(i);
                 if(i_rCount > 0) {
@@ -263,60 +285,112 @@ public class ScheduledArgentumRunnable implements Runnable {
     }
 
     protected AgSecond aggregate() {
-        this.readLock.lock();
         AgSecond result = new AgSecond();
 
         result.time = System.currentTimeMillis() / 1000;
         result.second = this.second;
+        last_aggregated_second = this.second;
 
-        if(rebuild_cumulative) {
-            if(last_active_threads == 0) last_active_threads = result.active_threads;
-            if(last_active_threads != result.active_threads) {
-                last_active_threads = result.active_threads;
-                //clear cumulative data!
-                Arrays.fill(this.percentileShiftArray, 0L);
-                for(String sampler : this.samplerCumulativeShiftArrayMap.keySet()) {
-                    Arrays.fill(this.samplerCumulativeShiftArrayMap.get(sampler), 0L);
+        if(!is_empty) {
+            this.readLock.lock();
+
+            if(rebuild_cumulative) {
+                if(last_active_threads == 0) last_active_threads = result.active_threads;
+                if(last_active_threads != result.active_threads) {
+                    last_active_threads = result.active_threads;
+                    //clear cumulative data!
+                    Arrays.fill(this.percentileShiftArray, 0L);
+                    for(String sampler : this.samplerCumulativeShiftArrayMap.keySet()) {
+                        Arrays.fill(this.samplerCumulativeShiftArrayMap.get(sampler), 0L);
+                    }
+                    log.warn("all cumulative data cleared!");
                 }
-                log.warn("all cumulative data cleared!");
             }
+            result.responseCodes = new HashMap<String, Integer>(this.responseCodeMap.size());
+            for(String key : this.responseCodeMap.keySet()) {
+                result.responseCodes.put(key, this.responseCodeMap.get(key).get());
+            }
+
+            result.inbound = this.inbound;
+            result.outbound = this.outbound;
+
+            result.percentile = calculateSecondTotalPercentile();
+            result.sampler_percentile = calculateSecondSamplerPercentile();
+
+            result.cumulative_percentile = calculateCumulativeTotalPercentile();
+            last_total_metrics.put("cumulative_percentile", new HashMap<String, Integer>(result.cumulative_percentile));
+            result.cumulative_sampler_percentile = calculateCumulativeSamplerPercentile();
+            last_total_metrics.put("cumulative_sampler_percentile", new HashMap<String, HashMap<String, Integer>>(result.cumulative_sampler_percentile));
+
+            result.time_periods = TIME_PERIODS;
+
+            result.interval_dist = calculateSecondTotalIntervalDistribution();
+            result.sampler_interval_dist = calculateSamplerSecondTotalIntervalDistribution();
+
+            result.samplers = new HashMap<String, Integer>(this.titleMap.size());
+            for(String key : this.titleMap.keySet()) {
+                result.samplers.put(key, this.titleMap.get(key));
+            }
+
+            result.throughput = this.throughput;
+            result.sampler_avg_rt = calculateSamplerAvgRT();
+
+            if(throughput != 0){
+                result.avg_request_size = this.outbound / throughput;
+                result.avg_response_size = this.inbound / throughput;
+                result.avg_rt = sumRT / throughput;
+            }
+
+            result.total_sampler_avg_rt = totalSamplerAvgRTMap;
+            last_total_metrics.put("total_sampler_avg_rt", new HashMap<String, Integer>(result.total_sampler_avg_rt));
+            result.total_sampler_std_dev_rt = calculateTotalSamplerStdDevRT();
+            last_total_metrics.put("total_sampler_std_dev_rt", new HashMap<String, Integer>(result.total_sampler_std_dev_rt));
+
+            delete();
+            this.readLock.unlock();
+
+        } else {
+            result.responseCodes = null;
+            result.inbound = 0;
+            result.outbound = 0;
+
+            result.percentile = null;
+            result.sampler_percentile = null;
+
+            Object obj_cumulative_percentile = last_total_metrics.get("cumulative_percentile");
+            if(obj_cumulative_percentile instanceof HashMap) {
+                result.cumulative_percentile = ((HashMap<String, Integer>) obj_cumulative_percentile);
+            } else result.cumulative_percentile = null;
+
+            Object obj_cumulative_sampler_percentile = last_total_metrics.get("cumulative_sampler_percentile");
+            if(obj_cumulative_sampler_percentile instanceof HashMap) {
+                result.cumulative_sampler_percentile = ((HashMap<String, HashMap<String, Integer>>) obj_cumulative_sampler_percentile);
+            } else result.cumulative_sampler_percentile = null;
+
+            result.time_periods = TIME_PERIODS;
+
+            result.interval_dist = null;
+            result.sampler_interval_dist = null;
+
+            result.samplers = null;
+
+            result.throughput = 0;
+            result.sampler_avg_rt = null;
+
+            result.avg_request_size = 0;
+            result.avg_response_size = 0;
+            result.avg_rt = 0;
+
+            Object obj_total_sampler_avg_rt = last_total_metrics.get("total_sampler_avg_rt");
+            if(obj_total_sampler_avg_rt instanceof HashMap) {
+               result.total_sampler_avg_rt = ((HashMap<String, Integer>) obj_total_sampler_avg_rt);
+            } else result.total_sampler_avg_rt = null;
+
+            Object obj_total_sampler_std_dev_rt = last_total_metrics.get("total_sampler_std_dev_rt");
+            if(obj_total_sampler_std_dev_rt instanceof HashMap) {
+                result.total_sampler_std_dev_rt = ((HashMap<String, Integer>) obj_total_sampler_std_dev_rt);
+            } else result.total_sampler_std_dev_rt = null;
         }
-        result.responseCodes = new HashMap<String, Integer>(this.responseCodeMap.size());
-        for(String key : this.responseCodeMap.keySet()) {
-            result.responseCodes.put(key, this.responseCodeMap.get(key).get());
-        }
-
-        result.inbound = this.inbound;
-        result.outbound = this.outbound;
-        if(throughput != 0){
-            result.avg_request_size = this.outbound / throughput;
-            result.avg_response_size = this.inbound / throughput;
-        }
-
-        result.percentile = calculateSecondTotalPercentile();
-        result.sampler_percentile = calculateSecondSamplerPercentile();
-
-        result.cumulative_percentile = calculateCumulativeTotalPercentile();
-        result.cumulative_sampler_percentile = calculateCumulativeSamplerPercentile();
-
-        result.time_periods = TIME_PERIODS;
-
-        result.interval_dist = calculateSecondTotalIntervalDistribution();
-        result.sampler_interval_dist = calculateSamplerSecondTotalIntervalDistribution();
-
-        result.samplers = new HashMap<String, Integer>(this.titleMap.size());
-        for(String key : this.titleMap.keySet()) {
-            result.samplers.put(key, this.titleMap.get(key));
-        }
-
-        result.throughput = this.throughput;
-        result.sampler_avg_rt = calculateSamplerAvgRT();
-        if(throughput != 0) result.avg_rt = sumRT / throughput;
-
-        result.total_sampler_avg_rt = totalSamplerAvgRTMap;
-        result.total_sampler_std_dev_rt = calculateTotalSamplerStdDevRT();
-        this.readLock.unlock();
-
         return result;
     }
 
@@ -337,62 +411,71 @@ public class ScheduledArgentumRunnable implements Runnable {
             last.put("time", agSecond.time);
             last.put("second", agSecond.second);
 
-            last.put("avg_lt", agSecond.avg_lt);
             last.put("active_threads", agSecond.active_threads);
 
-            last.put("rc", agSecond.responseCodes);
-            last.put("samplers", agSecond.samplers);
+            if(agSecond.throughput > 0) {
+                last.put("avg_lt", agSecond.avg_lt);
+                last.put("rc", agSecond.responseCodes);
+                last.put("samplers", agSecond.samplers);
 
-            JSONObject jsonTraffic = new JSONObject();
-            jsonTraffic.put("inbound", agSecond.inbound);
-            jsonTraffic.put("outbound", agSecond.outbound);
-            jsonTraffic.put("avg_response_size", agSecond.avg_response_size);
-            jsonTraffic.put("avg_request_size", agSecond.avg_request_size);
+                JSONObject jsonTraffic = new JSONObject();
+                jsonTraffic.put("inbound", agSecond.inbound);
+                jsonTraffic.put("outbound", agSecond.outbound);
+                jsonTraffic.put("avg_response_size", agSecond.avg_response_size);
+                jsonTraffic.put("avg_request_size", agSecond.avg_request_size);
 
-            last.put("traffic", jsonTraffic);
+                last.put("traffic", jsonTraffic);
+            }
 
             if(QUANTILES != null) {
-                last.put("overall_rt_quantile", agSecond.percentile);
-                last.put("sampler_rt_quantile", agSecond.sampler_percentile);
+                if(agSecond.throughput > 0) {
+                    last.put("overall_rt_quantile", agSecond.percentile);
+                    last.put("sampler_rt_quantile", agSecond.sampler_percentile);
+                }
                 total.put("overall_rt_quantile", agSecond.cumulative_percentile);
                 total.put("sampler_rt_quantile", agSecond.cumulative_sampler_percentile);
             }
             if(TIME_PERIODS != null) {
                 ArrayList<JSONObject> distList = new ArrayList<JSONObject>(agSecond.time_periods.length);
                 int prev = 0;
-                for(int i = 0 ;i<agSecond.time_periods.length;++i) {
-                    JSONObject jsonInterval = new JSONObject();
-                    jsonInterval.put("from", prev);
-                    jsonInterval.put("to", agSecond.time_periods[i]);
-                    jsonInterval.put("count", agSecond.interval_dist[i]);
-                    prev = agSecond.time_periods[i];
-                    distList.add(jsonInterval);
-                }
-                last.put("overall_interval_dist", distList);
-
-                JSONObject jsonSamplerIntervalDistribution = new JSONObject();
-                for(String sampler : agSecond.sampler_interval_dist.keySet()) {
-                    distList = new ArrayList<JSONObject>(agSecond.time_periods.length);
-                    prev = 0;
-                    int[] sampler_interval_dist = agSecond.sampler_interval_dist.get(sampler);
+                if(agSecond.throughput > 0) {
                     for(int i = 0 ;i<agSecond.time_periods.length;++i) {
                         JSONObject jsonInterval = new JSONObject();
                         jsonInterval.put("from", prev);
                         jsonInterval.put("to", agSecond.time_periods[i]);
-                        jsonInterval.put("count", sampler_interval_dist[i]);
+                        jsonInterval.put("count", agSecond.interval_dist[i]);
                         prev = agSecond.time_periods[i];
                         distList.add(jsonInterval);
                     }
-                    jsonSamplerIntervalDistribution.put(sampler, distList);
+                    last.put("overall_interval_dist", distList);
                 }
-                last.put("sampler_interval_dist", jsonSamplerIntervalDistribution);
+                if(agSecond.throughput > 0) {
+                    JSONObject jsonSamplerIntervalDistribution = new JSONObject();
+                    for(String sampler : agSecond.sampler_interval_dist.keySet()) {
+                        distList = new ArrayList<JSONObject>(agSecond.time_periods.length);
+                        prev = 0;
+                        int[] sampler_interval_dist = agSecond.sampler_interval_dist.get(sampler);
+                        for(int i = 0 ;i<agSecond.time_periods.length;++i) {
+                            JSONObject jsonInterval = new JSONObject();
+                            jsonInterval.put("from", prev);
+                            jsonInterval.put("to", agSecond.time_periods[i]);
+                            jsonInterval.put("count", sampler_interval_dist[i]);
+                            prev = agSecond.time_periods[i];
+                            distList.add(jsonInterval);
+                        }
+                        jsonSamplerIntervalDistribution.put(sampler, distList);
+                    }
+                    last.put("sampler_interval_dist", jsonSamplerIntervalDistribution);
+                }
             }
             total.put("sampler_avg_rt", agSecond.total_sampler_avg_rt);
             total.put("sampler_std_dev_rt", agSecond.total_sampler_std_dev_rt);
 
             last.put("throughput", agSecond.throughput);
-            last.put("sampler_avg_rt", agSecond.sampler_avg_rt);
-            last.put("overall_avg_rt", agSecond.avg_rt);
+            if(agSecond.throughput > 0) {
+                last.put("sampler_avg_rt", agSecond.sampler_avg_rt);
+                last.put("overall_avg_rt", agSecond.avg_rt);
+            }
 
             jsonSecond.put("last", last);
             jsonSecond.put("total", total);
@@ -402,7 +485,7 @@ public class ScheduledArgentumRunnable implements Runnable {
         } catch(Exception e) {
             log.error("Runnable exception", e);
         } finally {
-            delete();
+            //delete();
         }
     }
 
