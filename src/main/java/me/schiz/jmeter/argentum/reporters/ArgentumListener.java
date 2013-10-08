@@ -32,6 +32,8 @@ public class ArgentumListener extends AbstractListenerElement
     public static String percentiles = "ArgentumListener.percentiles";
     public static String timePeriods = "ArgentumListener.timePeriods";
     public static String rebuildCumulative = "ArgentumListener.rebuildCumulative";
+    public static String pdf = "ArgentumListener.pdf";
+    public static String cdf = "ArgentumListener.cdf";
 
     //private volatile boolean started = false;
     protected BufferedWriter writer;
@@ -112,6 +114,20 @@ public class ArgentumListener extends AbstractListenerElement
     }
     public boolean isRebuildCumulative() {
         return getPropertyAsBoolean(rebuildCumulative);
+    }
+
+    public void setPDF(boolean use) {
+        setProperty(pdf, use);
+    }
+    public boolean isEnablePDF() {
+        return getPropertyAsBoolean(pdf);
+    }
+
+    public void setCDF(boolean use) {
+        setProperty(cdf, use);
+    }
+    public boolean isEnableCDF() {
+        return getPropertyAsBoolean(cdf);
     }
 
     private boolean createSecond(Long second) {
@@ -275,7 +291,7 @@ public class ArgentumListener extends AbstractListenerElement
             if(executors == null) {
                 synchronized (this.getClass()) {
                     if(executors == null)   executors = Executors.newScheduledThreadPool(1);
-                    executors.scheduleAtFixedRate(new ScheduledArgentumRunnable(this, writer, isRebuildCumulative()), 0, 50, TimeUnit.MILLISECONDS);
+                    executors.scheduleAtFixedRate(new ScheduledArgentumRunnable(this, writer, isRebuildCumulative(), isEnablePDF(), isEnableCDF()), 0, 50, TimeUnit.MILLISECONDS);
                 }
             }
 

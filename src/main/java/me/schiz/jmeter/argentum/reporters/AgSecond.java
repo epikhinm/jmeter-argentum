@@ -1,5 +1,6 @@
 package me.schiz.jmeter.argentum.reporters;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 
 public class AgSecond {
@@ -32,4 +33,8 @@ public class AgSecond {
     public int[] time_periods;
     public int[] interval_dist;
     public HashMap<String, int[]> sampler_interval_dist;
+
+    //density functions
+    public HashMap<String, ArrayList<Long>> total_sampler_pdf;
+    public HashMap<String, ArrayList<Long>> total_sampler_cdf;
 }
