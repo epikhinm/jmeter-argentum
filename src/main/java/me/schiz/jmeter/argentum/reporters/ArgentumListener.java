@@ -10,15 +10,14 @@ import org.apache.jmeter.threads.JMeterContextService;
 import org.apache.jorphan.logging.LoggingManager;
 import org.apache.log.Logger;
 
-import java.io.BufferedWriter;
-import java.io.FileWriter;
-import java.io.IOException;
+import java.io.*;
 import java.util.LinkedList;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.zip.GZIPOutputStream;
 
 public class ArgentumListener extends AbstractListenerElement
         implements SampleListener, NoThreadClone, TestStateListener {
@@ -36,7 +35,10 @@ public class ArgentumListener extends AbstractListenerElement
     public static String cdf = "ArgentumListener.cdf";
 
     //private volatile boolean started = false;
-    protected BufferedWriter writer;
+    //protected BufferedWriter writer;
+
+    protected OutputStream outputStream;
+    protected PrintWriter printWriter;
 
     //runnable needs public vars:(
     public int timeout_value;
@@ -253,7 +255,15 @@ public class ArgentumListener extends AbstractListenerElement
             argentumListeners.add(this);
         }
 
-        try {            writer = new BufferedWriter(new FileWriter(getOutputFileName()));
+        try {
+            if(getOutputFileName().endsWith("gzip") || getOutputFileName().endsWith("gz")) {
+                outputStream = new GZIPOutputStream(new FileOutputStream(getOutputFileName()),
+                        true); //enable sync flush
+            } else {
+                outputStream = new FileOutputStream(getOutputFileName());
+            }
+            printWriter = new PrintWriter(outputStream,
+                    true); //enable autoflush
 
             timeout_value = getTimeout();
             secSet = new ConcurrentSkipListSet<Long>();
@@ -278,10 +288,6 @@ public class ArgentumListener extends AbstractListenerElement
 
                 if(ScheduledArgentumRunnable.TIME_PERIODS[ScheduledArgentumRunnable.TIME_PERIODS.length - 1] < timeout_value) {
                     int new_time_periods[] = new int[ScheduledArgentumRunnable.TIME_PERIODS.length + 1];
-                    //Hmmm. Sorry for that
-//                for(int i = 0; i < ScheduledArgentumRunnable.TIME_PERIODS.length ;++i) {
-//                    new_time_periods[i] = ScheduledArgentumRunnable.TIME_PERIODS[i];
-//                }
                     System.arraycopy(ScheduledArgentumRunnable.TIME_PERIODS, 0, new_time_periods, 0, ScheduledArgentumRunnable.TIME_PERIODS.length);
                     new_time_periods[ScheduledArgentumRunnable.TIME_PERIODS.length] = timeout_value;
                     ScheduledArgentumRunnable.TIME_PERIODS = new_time_periods;
@@ -291,7 +297,7 @@ public class ArgentumListener extends AbstractListenerElement
             if(executors == null) {
                 synchronized (this.getClass()) {
                     if(executors == null)   executors = Executors.newScheduledThreadPool(1);
-                    executors.scheduleAtFixedRate(new ScheduledArgentumRunnable(this, writer, isRebuildCumulative(), isEnablePDF(), isEnableCDF()), 0, 50, TimeUnit.MILLISECONDS);
+                    executors.scheduleAtFixedRate(new ScheduledArgentumRunnable(this, printWriter, isRebuildCumulative(), isEnablePDF(), isEnableCDF()), 0, 50, TimeUnit.MILLISECONDS);
                 }
             }
 
@@ -325,6 +331,13 @@ public class ArgentumListener extends AbstractListenerElement
             synchronized (argentumListeners) {
                 if(!argentumListeners.isEmpty())  argentumListeners.clear();
             }
+        }
+
+        printWriter.close();
+        try {
+            outputStream.close();
+        } catch (IOException e) {
+            log.warn("argentum teardown ", e);
         }
     }
 
