@@ -10,7 +10,11 @@ import org.apache.jmeter.threads.JMeterContextService;
 import org.apache.jorphan.logging.LoggingManager;
 import org.apache.log.Logger;
 
-import java.io.*;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.PrintWriter;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -34,9 +38,6 @@ public class ArgentumListener extends AbstractListenerElement
     public static String pdf = "ArgentumListener.pdf";
     public static String cdf = "ArgentumListener.cdf";
 
-    //private volatile boolean started = false;
-    //protected BufferedWriter writer;
-
     protected OutputStream outputStream;
     protected PrintWriter printWriter;
 
@@ -49,12 +50,14 @@ public class ArgentumListener extends AbstractListenerElement
     public ConcurrentHashMap<Long, AtomicLong> sumInboundTraffic; // for avg inbound traffic metric
     public ConcurrentHashMap<Long, AtomicLong> sumOutboundTraffic; // for avg outbound traffic metric
 
-    public ConcurrentHashMap<Long, AtomicLongArray> percentileDistMap; //seconds map for cumulative percentile distribution
-    public long[]    percentileDistShiftArray; //shift-array for cumulative percentile distribution
-    public ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicLongArray>>   samplerPercentileDistMap;
-    public ConcurrentHashMap<String, long[]>    samplerCumulativePercentileShiftArray;
+    public ConcurrentHashMap<Long, AtomicLongArray> lastPDF; //PDF for last N seconds
+    public long[]   totalOverallCDF;
+    public ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicLongArray>> lastSamplerPDF;
+    public ConcurrentHashMap<String, long[]>    totalSamplerCDF;
 
     public ConcurrentHashMap<Long, ReentrantReadWriteLock> rwLockMap;
+
+    public HashMap<String, Object> lastMetrics;
 
     private boolean started = false;
 
@@ -141,8 +144,8 @@ public class ArgentumListener extends AbstractListenerElement
             threadsMap.put(second, JMeterContextService.getNumberOfThreads());
             sumLTMap.put(second, new AtomicLong(0));
             responseCodeMap.put(second, new ConcurrentHashMap<String, AtomicInteger>());
-            percentileDistMap.put(second, new AtomicLongArray(timeout_value * 1000 + 1));
-            samplerPercentileDistMap.put(second, new ConcurrentHashMap<String, AtomicLongArray>());
+            lastPDF.put(second, new AtomicLongArray(timeout_value * 1000 + 1));
+            lastSamplerPDF.put(second, new ConcurrentHashMap<String, AtomicLongArray>());
             sumInboundTraffic.put(second, new AtomicLong(0));
             sumOutboundTraffic.put(second, new AtomicLong(0));
             rwLockMap.put(second, new ReentrantReadWriteLock());
@@ -163,9 +166,9 @@ public class ArgentumListener extends AbstractListenerElement
     }
 
     private void addToSamplerDistMap(Long second, String title, int rt) {
-        ConcurrentHashMap<String, AtomicLongArray> cursor = samplerPercentileDistMap.get(second);
+        ConcurrentHashMap<String, AtomicLongArray> cursor = lastSamplerPDF.get(second);
         if(cursor.get(title) == null) {
-            synchronized (samplerPercentileDistMap) {
+            synchronized (lastSamplerPDF) {
                 if(cursor.get(title) == null) {
                     cursor.put(title, new AtomicLongArray(timeout_value * 1000 + 1));
                 }
@@ -219,7 +222,7 @@ public class ArgentumListener extends AbstractListenerElement
                     return;
                 }
             }
-            percentileDistMap.get(second).incrementAndGet(rt);
+            lastPDF.get(second).incrementAndGet(rt);
             addToSamplerDistMap(second, samplerName, rt);
             addRCtoMap(second, convertResponseCode(sr));
             sumLTMap.get(second).getAndAdd(sr.getLatency());
@@ -274,14 +277,15 @@ public class ArgentumListener extends AbstractListenerElement
             sumOutboundTraffic = new ConcurrentHashMap<Long, AtomicLong>(timeout_value + floatingSeconds);
             rwLockMap = new ConcurrentHashMap<Long, ReentrantReadWriteLock>(timeout_value + floatingSeconds);
 
+            lastMetrics = new HashMap<String, Object>();
+
             if(getPercentiles() != null) {
                 ScheduledArgentumRunnable.QUANTILES = getPercentiles();
                 //For cumulative percentiles
-                percentileDistMap = new ConcurrentHashMap<Long, AtomicLongArray>(timeout_value + floatingSeconds);
-                percentileDistShiftArray = new long[timeout_value*1000 + 1];
-                samplerPercentileDistMap = new ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicLongArray>>(timeout_value + floatingSeconds);
-                samplerCumulativePercentileShiftArray = new ConcurrentHashMap<String, long[]>();
-
+                lastPDF = new ConcurrentHashMap<Long, AtomicLongArray>(timeout_value + floatingSeconds);
+                totalOverallCDF = new long[timeout_value*1000 + 1];
+                lastSamplerPDF = new ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicLongArray>>(timeout_value + floatingSeconds);
+                totalSamplerCDF = new ConcurrentHashMap<String, long[]>();
             }
             if(getTimePeriods() != null) {
                 ScheduledArgentumRunnable.TIME_PERIODS = getTimePeriods();
@@ -297,7 +301,7 @@ public class ArgentumListener extends AbstractListenerElement
             if(executors == null) {
                 synchronized (this.getClass()) {
                     if(executors == null)   executors = Executors.newScheduledThreadPool(1);
-                    executors.scheduleAtFixedRate(new ScheduledArgentumRunnable(this, printWriter, isRebuildCumulative(), isEnablePDF(), isEnableCDF()), 0, 50, TimeUnit.MILLISECONDS);
+                    executors.scheduleAtFixedRate(new ScheduledArgentumRunnable(this, printWriter, isRebuildCumulative(), isEnablePDF(), isEnableCDF(), lastMetrics), 0, 50, TimeUnit.MILLISECONDS);
                 }
             }
 
@@ -337,8 +341,9 @@ public class ArgentumListener extends AbstractListenerElement
         try {
             outputStream.close();
         } catch (IOException e) {
-            log.warn("argentum teardown ", e);
+            log.warn("teardown exception", e);
         }
+        lastMetrics.clear();
     }
 
     @Override

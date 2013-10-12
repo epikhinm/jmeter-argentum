@@ -31,8 +31,8 @@ public class ScheduledArgentumRunnable implements Runnable {
     protected long inbound;
     protected long outbound;
     protected Writer writer;
-    protected AtomicLongArray percentileDistArray;
-    protected long[] percentileShiftArray;
+    protected AtomicLongArray overallPDF;
+    protected long[] totalOverallCDF;
     protected boolean is_empty;
 
     //for per thread-configuration cumulative rt-distributions
@@ -41,33 +41,38 @@ public class ScheduledArgentumRunnable implements Runnable {
     protected boolean enablePDF;
     protected boolean enableCDF;
 
-    protected ConcurrentHashMap<String, AtomicLongArray> samplerPercentileDistMap;
-    protected ConcurrentHashMap<String, long[]> samplerCumulativeShiftArrayMap;
+    protected ConcurrentHashMap<String, AtomicLongArray> samplerPDF;
+    protected ConcurrentHashMap<String, long[]> totalSamplerCDF;
     protected HashMap<String, Integer> totalSamplerAvgRTMap;
     protected ReentrantReadWriteLock.WriteLock readLock;
 
     protected int timeout;
-    private static int last_threads_count;
-    protected static HashMap<String, Object> last_total_metrics = new HashMap<String, Object>();
-    protected static long last_aggregated_second;
+    protected HashMap<String, Object> lastMetrics;
 
     static float[] QUANTILES = null;
     static int[] TIME_PERIODS = null;
     static float[] DEFAULT_QUANTILES = {0.25f, 0.5f, 0.75f, 0.8f, 0.9f, 0.95f, 0.98f, 0.99f, 1.0f};
     static int[] DEFAULT_TIME_PERIODS = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 150, 200, 250, 300, 350, 400, 450, 500, 600, 650, 700, 750, 800, 850, 900, 950, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000, 6500, 7000, 7500, 8000, 8500, 9000, 9500, 10000, 11000};
 
-    public ScheduledArgentumRunnable(ArgentumListener listener, Writer writer, boolean rebuildCumulative, boolean enablePDF, boolean enableCDF) {
+    public ScheduledArgentumRunnable(ArgentumListener listener, Writer writer, boolean rebuildCumulative, boolean enablePDF, boolean enableCDF, HashMap<String, Object> lastMetrics) {
         this.listener = listener;
         this.writer = writer;
         this.timeout = this.listener.getTimeout();
         this.rebuild_cumulative = rebuildCumulative;
         this.enablePDF = enablePDF;
         this.enableCDF = enableCDF;
+        this.lastMetrics = lastMetrics;
     }
 
     public boolean check() {
         long now = System.currentTimeMillis() / 1000;
         long checkSecond = (now  - timeout - 1);
+
+        long last_aggregated_second = 0;
+        Object obj_last_second = lastMetrics.get("second");
+        if(obj_last_second instanceof Long) {
+            last_aggregated_second = (Long) obj_last_second;
+        } else last_aggregated_second = 0;
 
         if(checkSecond == last_aggregated_second) return false;
         if(this.listener.secSet.contains(checkSecond)) {
@@ -76,7 +81,6 @@ public class ScheduledArgentumRunnable implements Runnable {
             this.is_empty = false;
             this.second = checkSecond;//this.listener.secSet.pollFirst();
             this.active_threads = this.listener.threadsMap.get(this.second);
-            last_threads_count = this.active_threads;
             this.throughput = 0;
             this.responseCodeMap = this.listener.responseCodeMap.get(this.second);
             this.titleMap = new HashMap<String, Integer>();
@@ -85,10 +89,10 @@ public class ScheduledArgentumRunnable implements Runnable {
             this.sumLT = this.listener.sumLTMap.get(this.second).get();
             this.inbound = this.listener.sumInboundTraffic.get(this.second).get();
             this.outbound = this.listener.sumOutboundTraffic.get(this.second).get();
-            this.percentileDistArray = this.listener.percentileDistMap.get(this.second);
-            this.percentileShiftArray = this.listener.percentileDistShiftArray;
-            this.samplerPercentileDistMap = this.listener.samplerPercentileDistMap.get(this.second);
-            this.samplerCumulativeShiftArrayMap = this.listener.samplerCumulativePercentileShiftArray;
+            this.overallPDF = this.listener.lastPDF.get(this.second);
+            this.totalOverallCDF = this.listener.totalOverallCDF;
+            this.samplerPDF = this.listener.lastSamplerPDF.get(this.second);
+            this.totalSamplerCDF = this.listener.totalSamplerCDF;
             this.totalSamplerAvgRTMap = new HashMap<String, Integer>();
             this.readLock = this.listener.rwLockMap.get(second).writeLock();
 
@@ -107,10 +111,10 @@ public class ScheduledArgentumRunnable implements Runnable {
             this.sumLT = 0;
             this.inbound = 0;
             this.outbound = 0;
-            this.percentileDistArray = null;
-            this.percentileShiftArray = this.listener.percentileDistShiftArray;
-            this.samplerPercentileDistMap = null;
-            this.samplerCumulativeShiftArrayMap = this.listener.samplerCumulativePercentileShiftArray;
+            this.overallPDF = null;
+            this.totalOverallCDF = this.listener.totalOverallCDF;
+            this.samplerPDF = null;
+            this.totalSamplerCDF = this.listener.totalSamplerCDF;
             this.totalSamplerAvgRTMap = new HashMap<String, Integer>();
             this.readLock = null;
         }
@@ -123,24 +127,24 @@ public class ScheduledArgentumRunnable implements Runnable {
         this.listener.responseCodeMap.remove(this.second);
         this.listener.sumInboundTraffic.remove(this.second);
         this.listener.sumOutboundTraffic.remove(this.second);
-        this.listener.percentileDistMap.remove(this.second);
-        this.listener.samplerPercentileDistMap.remove(this.second);
+        this.listener.lastPDF.remove(this.second);
+        this.listener.lastSamplerPDF.remove(this.second);
         this.listener.rwLockMap.remove(this.second);
-        samplerPercentileDistMap = null;
+        samplerPDF = null;
     }
 
-    private HashMap<String, Integer> calculateSecondTotalPercentile() {
+    private HashMap<String, Integer> calculateSecondOverallPercentile() {
         HashMap<String, Integer> result = new HashMap(QUANTILES.length);
 
         long i_rCount;
         long[] generalShiftArray = new long[timeout*1000 + 1];
-        for(int i = 0; i < percentileDistArray.length() ; ++i) {
-            i_rCount = percentileDistArray.get(i);
+        for(int i = 0; i < overallPDF.length() ; ++i) {
+            i_rCount = overallPDF.get(i);
             if(i_rCount > 0) {
                 this.throughput += i_rCount;
                 for(int j=i; j < generalShiftArray.length; ++j)  {
                     generalShiftArray[j] += i_rCount; //What about SSE?:)
-                    percentileShiftArray[j] += i_rCount; // for cumulative distribution
+                    totalOverallCDF[j] += i_rCount; // for cumulative distribution
                 }
                 sumRT += i_rCount * i;
             }
@@ -156,23 +160,23 @@ public class ScheduledArgentumRunnable implements Runnable {
     private HashMap<String, Integer> calculateCumulativeTotalPercentile() {
         HashMap<String, Integer> result = new HashMap<String, Integer>(QUANTILES.length);
         for(float f: QUANTILES) {
-            result.put(String.valueOf(f * 100), (int)binarySearchMinIndex(this.percentileShiftArray,  f));
+            result.put(String.valueOf(f * 100), (int)binarySearchMinIndex(this.totalOverallCDF,  f));
         }
         return result;
     }
 
     private HashMap<String, HashMap<String, Integer>> calculateSecondSamplerPercentile() {
-        HashMap<String, HashMap<String, Integer>> result = new HashMap<String, HashMap<String, Integer>>(samplerPercentileDistMap.size());
-        for(String sampler : samplerPercentileDistMap.keySet()) {
+        HashMap<String, HashMap<String, Integer>> result = new HashMap<String, HashMap<String, Integer>>(samplerPDF.size());
+        for(String sampler : samplerPDF.keySet()) {
             HashMap<String, Integer> samplerPercentile = new HashMap<String, Integer>(QUANTILES.length);
 
-            AtomicLongArray samplerDistribution = samplerPercentileDistMap.get(sampler);
-            long[] cumulativeShiftArray = samplerCumulativeShiftArrayMap.get(sampler);
+            AtomicLongArray samplerDistribution = samplerPDF.get(sampler);
+            long[] cumulativeShiftArray = totalSamplerCDF.get(sampler);
 
             if(cumulativeShiftArray == null) {
                 cumulativeShiftArray = new long[timeout*1000 + 1];
                 Arrays.fill(cumulativeShiftArray, 0);
-                samplerCumulativeShiftArrayMap.put(sampler, cumulativeShiftArray);
+                totalSamplerCDF.put(sampler, cumulativeShiftArray);
             }
 
             long samplerThroughput = 0;
@@ -215,11 +219,11 @@ public class ScheduledArgentumRunnable implements Runnable {
     }
 
     public HashMap<String, HashMap<String, Integer>> calculateCumulativeSamplerPercentile() {
-        HashMap<String, HashMap<String, Integer>> result = new HashMap<String, HashMap<String, Integer>>(samplerPercentileDistMap.size());
-        for(String sampler : this.samplerCumulativeShiftArrayMap.keySet()) {
+        HashMap<String, HashMap<String, Integer>> result = new HashMap<String, HashMap<String, Integer>>(samplerPDF.size());
+        for(String sampler : this.totalSamplerCDF.keySet()) {
             HashMap<String, Integer> samplerCumulativePercentile = new HashMap<String, Integer>(QUANTILES.length);
             for(float f: QUANTILES) {
-                samplerCumulativePercentile.put(String.valueOf(f * 100), (int)binarySearchMinIndex(this.samplerCumulativeShiftArrayMap.get(sampler), f));
+                samplerCumulativePercentile.put(String.valueOf(f * 100), (int)binarySearchMinIndex(this.totalSamplerCDF.get(sampler), f));
             }
             result.put(sampler, samplerCumulativePercentile);
         }
@@ -232,8 +236,8 @@ public class ScheduledArgentumRunnable implements Runnable {
         int[] distList = new int[TIME_PERIODS.length];
         for(int i=0; i<TIME_PERIODS.length;++i) {
             sum = 0;
-            for(int j=prev; j< TIME_PERIODS[i] && j < this.percentileDistArray.length();++j) {
-                sum += this.percentileDistArray.get(j); //SSE ?
+            for(int j=prev; j< TIME_PERIODS[i] && j < this.overallPDF.length();++j) {
+                sum += this.overallPDF.get(j); //SSE ?
             }
             distList[i] = (int)sum;
             prev = TIME_PERIODS[i];
@@ -241,16 +245,16 @@ public class ScheduledArgentumRunnable implements Runnable {
         return distList;
     }
 
-    private HashMap<String, int[]> calculateSamplerSecondTotalIntervalDistribution() {
-        HashMap<String, int[]> result = new HashMap<String, int[]>(samplerPercentileDistMap.size());
-        for(String sampler : samplerPercentileDistMap.keySet()) {
+    private HashMap<String, int[]> calculateSamplerSecondOverallIntervalDistribution() {
+        HashMap<String, int[]> result = new HashMap<String, int[]>(samplerPDF.size());
+        for(String sampler : samplerPDF.keySet()) {
             int[] distList = new int[TIME_PERIODS.length];
             long sum;
             int prev = 0;
             for(int i=0; i<TIME_PERIODS.length;++i) {
                 sum = 0;
-                for(int j=prev; j < TIME_PERIODS[i] && j < this.samplerPercentileDistMap.get(sampler).length();j++) {
-                    sum += this.samplerPercentileDistMap.get(sampler).get(j);
+                for(int j=prev; j < TIME_PERIODS[i] && j < this.samplerPDF.get(sampler).length();j++) {
+                    sum += this.samplerPDF.get(sampler).get(j);
                 }
                 distList[i] = (int)sum;
                 prev = TIME_PERIODS[i];
@@ -271,7 +275,7 @@ public class ScheduledArgentumRunnable implements Runnable {
     private HashMap<String, Integer> calculateTotalSamplerStdDevRT() {
         HashMap<String, Integer> result = new HashMap<String, Integer>(titleMap.size());
         for(String sample : sumRTSamplerMap.keySet()) {
-            long[] total_sampler_shift_array = this.samplerCumulativeShiftArrayMap.get(sample);
+            long[] total_sampler_shift_array = this.totalSamplerCDF.get(sample);
             long sampler_avg_rt = Long.valueOf(this.totalSamplerAvgRTMap.get(sample));
             long quad;
             long last_shift_count = 0;
@@ -289,9 +293,9 @@ public class ScheduledArgentumRunnable implements Runnable {
     }
 
     private HashMap<String, ArrayList<Long>> calculateTotalSamplerPDF() {
-        HashMap<String, ArrayList<Long>> pdf = new HashMap<String, ArrayList<Long>>(this.samplerCumulativeShiftArrayMap.size());
-        for(String sampler : this.samplerCumulativeShiftArrayMap.keySet()) {
-            long[] cdf = this.samplerCumulativeShiftArrayMap.get(sampler);
+        HashMap<String, ArrayList<Long>> pdf = new HashMap<String, ArrayList<Long>>(this.totalSamplerCDF.size());
+        for(String sampler : this.totalSamplerCDF.keySet()) {
+            long[] cdf = this.totalSamplerCDF.get(sampler);
             //trim large array
             int trimmed_size = cdf.length;
             for(int i = cdf.length - 2; i-->0;) {
@@ -312,9 +316,9 @@ public class ScheduledArgentumRunnable implements Runnable {
     }
 
     private HashMap<String, ArrayList<Long>> calculateTotalSamplerCDF() {
-        HashMap<String, ArrayList<Long>> cdf = new HashMap<String, ArrayList<Long>>(this.samplerCumulativeShiftArrayMap.size());
-        for(String sampler : this.samplerCumulativeShiftArrayMap.keySet()) {
-            long[] raw_cdf = this.samplerCumulativeShiftArrayMap.get(sampler);
+        HashMap<String, ArrayList<Long>> cdf = new HashMap<String, ArrayList<Long>>(this.totalSamplerCDF.size());
+        for(String sampler : this.totalSamplerCDF.keySet()) {
+            long[] raw_cdf = this.totalSamplerCDF.get(sampler);
             //trim large array
             int trimmed_size = raw_cdf.length;
             for(int i = raw_cdf.length - 2; i-->0;) {
@@ -337,7 +341,7 @@ public class ScheduledArgentumRunnable implements Runnable {
 
         result.time = System.currentTimeMillis() / 1000;
         result.second = this.second;
-        last_aggregated_second = this.second;
+        lastMetrics.put("second", Long.valueOf(this.second));
 
         if(!is_empty) {
             this.readLock.lock();
@@ -347,13 +351,14 @@ public class ScheduledArgentumRunnable implements Runnable {
                 if(last_active_threads != result.active_threads) {
                     last_active_threads = result.active_threads;
                     //clear cumulative data!
-                    Arrays.fill(this.percentileShiftArray, 0L);
-                    for(String sampler : this.samplerCumulativeShiftArrayMap.keySet()) {
-                        Arrays.fill(this.samplerCumulativeShiftArrayMap.get(sampler), 0L);
+                    Arrays.fill(this.totalOverallCDF, 0L);
+                    for(String sampler : this.totalSamplerCDF.keySet()) {
+                        Arrays.fill(this.totalSamplerCDF.get(sampler), 0L);
                     }
                     log.warn("all cumulative data cleared!");
                 }
             }
+            lastMetrics.put("active_threads", new Integer(result.active_threads));
             result.responseCodes = new HashMap<String, Integer>(this.responseCodeMap.size());
             for(String key : this.responseCodeMap.keySet()) {
                 result.responseCodes.put(key, this.responseCodeMap.get(key).get());
@@ -362,18 +367,18 @@ public class ScheduledArgentumRunnable implements Runnable {
             result.inbound = this.inbound;
             result.outbound = this.outbound;
 
-            result.percentile = calculateSecondTotalPercentile();
+            result.percentile = calculateSecondOverallPercentile();
             result.sampler_percentile = calculateSecondSamplerPercentile();
 
             result.cumulative_percentile = calculateCumulativeTotalPercentile();
-            last_total_metrics.put("cumulative_percentile", new HashMap<String, Integer>(result.cumulative_percentile));
+            lastMetrics.put("cumulative_percentile", new HashMap<String, Integer>(result.cumulative_percentile));
             result.cumulative_sampler_percentile = calculateCumulativeSamplerPercentile();
-            last_total_metrics.put("cumulative_sampler_percentile", new HashMap<String, HashMap<String, Integer>>(result.cumulative_sampler_percentile));
+            lastMetrics.put("cumulative_sampler_percentile", new HashMap<String, HashMap<String, Integer>>(result.cumulative_sampler_percentile));
 
             result.time_periods = TIME_PERIODS;
 
             result.interval_dist = calculateSecondTotalIntervalDistribution();
-            result.sampler_interval_dist = calculateSamplerSecondTotalIntervalDistribution();
+            result.sampler_interval_dist = calculateSamplerSecondOverallIntervalDistribution();
 
             result.samplers = new HashMap<String, Integer>(this.titleMap.size());
             for(String key : this.titleMap.keySet()) {
@@ -390,16 +395,16 @@ public class ScheduledArgentumRunnable implements Runnable {
             }
 
             result.total_sampler_avg_rt = totalSamplerAvgRTMap;
-            last_total_metrics.put("total_sampler_avg_rt", new HashMap<String, Integer>(result.total_sampler_avg_rt));
+            lastMetrics.put("total_sampler_avg_rt", new HashMap<String, Integer>(result.total_sampler_avg_rt));
             result.total_sampler_std_dev_rt = calculateTotalSamplerStdDevRT();
-            last_total_metrics.put("total_sampler_std_dev_rt", new HashMap<String, Integer>(result.total_sampler_std_dev_rt));
+            lastMetrics.put("total_sampler_std_dev_rt", new HashMap<String, Integer>(result.total_sampler_std_dev_rt));
             if(enablePDF) {
                 result.total_sampler_pdf = calculateTotalSamplerPDF();
-                last_total_metrics.put("total_sampler_pdf", new HashMap<String, ArrayList<Long>>(result.total_sampler_pdf));
+                lastMetrics.put("total_sampler_pdf", new HashMap<String, ArrayList<Long>>(result.total_sampler_pdf));
             }
             if(enableCDF) {
                 result.total_sampler_cdf = calculateTotalSamplerCDF();
-                last_total_metrics.put("total_sampler_cdf", new HashMap<String, ArrayList<Long>>(result.total_sampler_cdf));
+                lastMetrics.put("total_sampler_cdf", new HashMap<String, ArrayList<Long>>(result.total_sampler_cdf));
             }
 
             delete();
@@ -413,12 +418,12 @@ public class ScheduledArgentumRunnable implements Runnable {
             result.percentile = null;
             result.sampler_percentile = null;
 
-            Object obj_cumulative_percentile = last_total_metrics.get("cumulative_percentile");
+            Object obj_cumulative_percentile = lastMetrics.get("cumulative_percentile");
             if(obj_cumulative_percentile instanceof HashMap) {
                 result.cumulative_percentile = ((HashMap<String, Integer>) obj_cumulative_percentile);
             } else result.cumulative_percentile = null;
 
-            Object obj_cumulative_sampler_percentile = last_total_metrics.get("cumulative_sampler_percentile");
+            Object obj_cumulative_sampler_percentile = lastMetrics.get("cumulative_sampler_percentile");
             if(obj_cumulative_sampler_percentile instanceof HashMap) {
                 result.cumulative_sampler_percentile = ((HashMap<String, HashMap<String, Integer>>) obj_cumulative_sampler_percentile);
             } else result.cumulative_sampler_percentile = null;
@@ -437,22 +442,27 @@ public class ScheduledArgentumRunnable implements Runnable {
             result.avg_response_size = 0;
             result.avg_rt = 0;
 
-            Object obj_total_sampler_avg_rt = last_total_metrics.get("total_sampler_avg_rt");
+            Object obj_active_threads = lastMetrics.get("active_threads");
+            if(obj_active_threads instanceof Integer) {
+                result.active_threads = (Integer) obj_active_threads;
+            } else result.active_threads = 0;
+
+            Object obj_total_sampler_avg_rt = lastMetrics.get("total_sampler_avg_rt");
             if(obj_total_sampler_avg_rt instanceof HashMap) {
                result.total_sampler_avg_rt = ((HashMap<String, Integer>) obj_total_sampler_avg_rt);
             } else result.total_sampler_avg_rt = null;
 
-            Object obj_total_sampler_std_dev_rt = last_total_metrics.get("total_sampler_std_dev_rt");
+            Object obj_total_sampler_std_dev_rt = lastMetrics.get("total_sampler_std_dev_rt");
             if(obj_total_sampler_std_dev_rt instanceof HashMap) {
                 result.total_sampler_std_dev_rt = ((HashMap<String, Integer>) obj_total_sampler_std_dev_rt);
             } else result.total_sampler_std_dev_rt = null;
 
-            Object obj_total_sampler_pdf = last_total_metrics.get("total_sampler_pdf");
+            Object obj_total_sampler_pdf = lastMetrics.get("total_sampler_pdf");
             if(obj_total_sampler_pdf instanceof HashMap) {
                 result.total_sampler_pdf = ((HashMap<String, ArrayList<Long>>) obj_total_sampler_pdf);
             } else result.total_sampler_pdf = null;
 
-            Object obj_total_sampler_cdf = last_total_metrics.get("total_sampler_cdf");
+            Object obj_total_sampler_cdf = lastMetrics.get("total_sampler_cdf");
             if(obj_total_sampler_cdf instanceof HashMap) {
                 result.total_sampler_cdf = ((HashMap<String, ArrayList<Long>>) obj_total_sampler_cdf);
             } else result.total_sampler_cdf = null;
@@ -563,7 +573,7 @@ public class ScheduledArgentumRunnable implements Runnable {
         long x = (long)(array[right] * f);
         if(x > array[right])    x = array[right];   //for case when x * 1.0f > x
         while (right - left > 1 ) {
-            half_sum = (right + left) / 2;
+            half_sum = (right + left) >>> 1;
             if(array[half_sum] >= x) right = half_sum;
             else if(array[half_sum] < x) left = half_sum;
         }
