@@ -215,6 +215,18 @@ public class ScheduledArgentumRunnable implements Runnable {
             result.put(sampler, samplerPercentile);
         }
 
+        //fill mean values from last data
+        Object obj_total_sampler_avg_rt = lastMetrics.get("total_sampler_avg_rt");
+        HashMap<String, Integer> lastTotalSamplerAvgRTMap;
+        if(obj_total_sampler_avg_rt instanceof HashMap) {
+            lastTotalSamplerAvgRTMap = ((HashMap<String, Integer>) obj_total_sampler_avg_rt);
+            for(String sampler: lastTotalSamplerAvgRTMap.keySet()) {
+                if(!this.totalSamplerAvgRTMap.containsKey(sampler)) {
+                    this.totalSamplerAvgRTMap.put(sampler, lastTotalSamplerAvgRTMap.get(sampler));
+                }
+            }
+        }
+
         return result;
     }
 
@@ -363,6 +375,8 @@ public class ScheduledArgentumRunnable implements Runnable {
             for(String key : this.responseCodeMap.keySet()) {
                 result.responseCodes.put(key, this.responseCodeMap.get(key).get());
             }
+
+            result.active_threads = this.active_threads;
 
             result.inbound = this.inbound;
             result.outbound = this.outbound;

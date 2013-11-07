@@ -37,11 +37,13 @@ public class ArgentumListener extends AbstractListenerElement
     public static String rebuildCumulative = "ArgentumListener.rebuildCumulative";
     public static String pdf = "ArgentumListener.pdf";
     public static String cdf = "ArgentumListener.cdf";
+    public static String dontHandleTheBadResponses = "ArgentumListener.dontHandleTheBadResponses";
 
     protected OutputStream outputStream;
     protected PrintWriter printWriter;
 
     //runnable needs public vars:(
+    public boolean dont_include_bad_answers; //for caching
     public int timeout_value;
     public ConcurrentSkipListSet<Long> secSet;
     public ConcurrentHashMap<Long, Integer> threadsMap; //for active_threads metric
@@ -77,6 +79,9 @@ public class ArgentumListener extends AbstractListenerElement
     }
     public float[] getPercentiles() {
         String x = getPropertyAsString(percentiles);
+        if(x == null) return ScheduledArgentumRunnable.DEFAULT_QUANTILES;
+        if(x.isEmpty()) return ScheduledArgentumRunnable.DEFAULT_QUANTILES;
+
         String[] times = x.split(" ");
         float[] percs = new float[times.length];
         try{
@@ -94,6 +99,8 @@ public class ArgentumListener extends AbstractListenerElement
     }
     public int[] getTimePeriods() {
         String x = getPropertyAsString(timePeriods);
+        if(x == null) return ScheduledArgentumRunnable.DEFAULT_TIME_PERIODS;
+        if(x.isEmpty()) return ScheduledArgentumRunnable.DEFAULT_TIME_PERIODS;
         String[] times = x.split(" ");
         int[] time_periods = new int[times.length];
         int j = 0;
@@ -112,6 +119,13 @@ public class ArgentumListener extends AbstractListenerElement
     }
     public int getTimeout() {
         return getPropertyAsInt(timeout);
+    }
+    public void setDontHandleTheBadResponses(boolean flag) {
+        setProperty(dontHandleTheBadResponses, flag);
+        if(flag != dont_include_bad_answers)    dont_include_bad_answers = flag;
+    }
+    public boolean getDontHandleTheBadResponses() {
+        return getPropertyAsBoolean(dontHandleTheBadResponses);
     }
 
     public void setRebuildCumulative(boolean flag) {
@@ -189,6 +203,7 @@ public class ArgentumListener extends AbstractListenerElement
         long now = System.currentTimeMillis() / 1000;
         SampleResult sr = sampleEvent.getResult();
 
+        boolean success = sr.isSuccessful();
         long second = sr.getEndTime() / 1000;
         String samplerName = sr.getSampleLabel();
         int rt = (int)sr.getTime();
@@ -222,10 +237,13 @@ public class ArgentumListener extends AbstractListenerElement
                     return;
                 }
             }
-            lastPDF.get(second).incrementAndGet(rt);
+            if(dont_include_bad_answers == false ||
+                    (dont_include_bad_answers == true && success)) {
+                lastPDF.get(second).incrementAndGet(rt);
+                sumLTMap.get(second).getAndAdd(sr.getLatency());
+            }
             addToSamplerDistMap(second, samplerName, rt);
             addRCtoMap(second, convertResponseCode(sr));
-            sumLTMap.get(second).getAndAdd(sr.getLatency());
             sumInboundTraffic.get(second).getAndAdd(sr.getBodySize());
             sumOutboundTraffic.get(second).getAndAdd(sr.getHeadersSize());
             writeLock.unlock();
@@ -269,6 +287,7 @@ public class ArgentumListener extends AbstractListenerElement
                     true); //enable autoflush
 
             timeout_value = getTimeout();
+            dont_include_bad_answers = getDontHandleTheBadResponses();
             secSet = new ConcurrentSkipListSet<Long>();
             threadsMap = new ConcurrentHashMap<Long, Integer>(timeout_value + floatingSeconds);
             sumLTMap = new ConcurrentHashMap<Long, AtomicLong>(timeout_value + floatingSeconds);
@@ -279,23 +298,19 @@ public class ArgentumListener extends AbstractListenerElement
 
             lastMetrics = new HashMap<String, Object>();
 
-            if(getPercentiles() != null) {
-                ScheduledArgentumRunnable.QUANTILES = getPercentiles();
-                //For cumulative percentiles
-                lastPDF = new ConcurrentHashMap<Long, AtomicLongArray>(timeout_value + floatingSeconds);
-                totalOverallCDF = new long[timeout_value*1000 + 1];
-                lastSamplerPDF = new ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicLongArray>>(timeout_value + floatingSeconds);
-                totalSamplerCDF = new ConcurrentHashMap<String, long[]>();
-            }
-            if(getTimePeriods() != null) {
-                ScheduledArgentumRunnable.TIME_PERIODS = getTimePeriods();
+            ScheduledArgentumRunnable.QUANTILES = getPercentiles();
+            //For cumulative percentiles
+            lastPDF = new ConcurrentHashMap<Long, AtomicLongArray>(timeout_value + floatingSeconds);
+            totalOverallCDF = new long[timeout_value*1000 + 1];
+            lastSamplerPDF = new ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicLongArray>>(timeout_value + floatingSeconds);
+            totalSamplerCDF = new ConcurrentHashMap<String, long[]>();
 
-                if(ScheduledArgentumRunnable.TIME_PERIODS[ScheduledArgentumRunnable.TIME_PERIODS.length - 1] < timeout_value) {
-                    int new_time_periods[] = new int[ScheduledArgentumRunnable.TIME_PERIODS.length + 1];
-                    System.arraycopy(ScheduledArgentumRunnable.TIME_PERIODS, 0, new_time_periods, 0, ScheduledArgentumRunnable.TIME_PERIODS.length);
-                    new_time_periods[ScheduledArgentumRunnable.TIME_PERIODS.length] = timeout_value;
-                    ScheduledArgentumRunnable.TIME_PERIODS = new_time_periods;
-                }
+            ScheduledArgentumRunnable.TIME_PERIODS = getTimePeriods();
+            if(ScheduledArgentumRunnable.TIME_PERIODS[ScheduledArgentumRunnable.TIME_PERIODS.length - 1] < timeout_value) {
+                int new_time_periods[] = new int[ScheduledArgentumRunnable.TIME_PERIODS.length + 1];
+                System.arraycopy(ScheduledArgentumRunnable.TIME_PERIODS, 0, new_time_periods, 0, ScheduledArgentumRunnable.TIME_PERIODS.length);
+                new_time_periods[ScheduledArgentumRunnable.TIME_PERIODS.length] = timeout_value;
+                ScheduledArgentumRunnable.TIME_PERIODS = new_time_periods;
             }
 
             if(executors == null) {
@@ -322,8 +337,15 @@ public class ArgentumListener extends AbstractListenerElement
     @Override
     public void testEnded() {
         started = false;
+        long start = System.currentTimeMillis();
         while(secSet.size() > 0) {
-            //last second may be dropped
+            try {
+                // 3s timeout
+                if(System.currentTimeMillis() - start > 3000) break;
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                log.warn("Interrupted when argentum wait agg & flush phase", e);
+            }
         }
         if(executors != null) {
             synchronized (this.getClass()) {
@@ -358,6 +380,5 @@ public class ArgentumListener extends AbstractListenerElement
             if(sr.isSuccessful())   return RC_OK;
             else                    return RC_ERROR;
         }
-
     }
 }
